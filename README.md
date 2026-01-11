@@ -11,6 +11,7 @@ Provides Go bindings to:
 - Query and set default applications for URL schemes
 - Resolve file extensions to UTIs
 - List all capable application handlers
+- List all installed applications with metadata (name, path, bundle ID)
 
 ## Requirements
 
@@ -76,6 +77,15 @@ func main() {
     err = bridge.SetDefaultForScheme("/Applications/Firefox.app", "http")
     if err != nil {
         log.Fatal(err)
+    }
+
+    // List all installed applications
+    apps, err := bridge.ListAllApplications()
+    if err != nil {
+        log.Fatal(err)
+    }
+    for _, app := range apps {
+        fmt.Printf("%s - %s (%s)\n", app.Name, app.Path, app.BundleID)
     }
 }
 ```
@@ -182,6 +192,36 @@ Returns all applications capable of handling a given URL scheme.
 ```go
 apps, err := bridge.ListAppsForScheme("http")
 // Returns: ["/Applications/Safari.app", "/Applications/Firefox.app", ...]
+```
+
+#### `ListAllApplications() ([]AppInfo, error)`
+
+Returns all installed applications on the system with their metadata.
+
+**Returns:**
+
+- Slice of `AppInfo` structures containing application metadata
+- Error if operation fails
+
+**AppInfo Structure:**
+
+```go
+type AppInfo struct {
+    Name     string // Application display name
+    Path     string // Full path to application bundle
+    BundleID string // Bundle identifier (e.g., "com.apple.Safari")
+}
+```
+
+**Example:**
+
+```go
+apps, err := bridge.ListAllApplications()
+// Returns: []AppInfo{
+//   {Name: "Safari", Path: "/Applications/Safari.app", BundleID: "com.apple.Safari"},
+//   {Name: "Chrome", Path: "/Applications/Google Chrome.app", BundleID: "com.google.Chrome"},
+//   ...
+// }
 ```
 
 ### Setter Functions

@@ -396,6 +396,28 @@ func TestListAppsForScheme(t *testing.T) {
 	}
 }
 
+// TestListAllApplications tests listing all installed applications
+func TestListAllApplications(t *testing.T) {
+	apps, err := ListAllApplications()
+	if err != nil {
+		t.Fatalf("ListAllApplications() error = %v", err)
+	}
+
+	if len(apps) == 0 {
+		t.Errorf("ListAllApplications() returned zero applications")
+	}
+
+	t.Logf("Total applications found: %d", len(apps))
+
+	// Check for presence of field in the first app as a sample
+	firstApp := apps[0]
+	if firstApp.Name == "" || firstApp.Path == "" || firstApp.BundleID == "" {
+		t.Errorf("ListAllApplications() returned app with missing fields: %+v", firstApp)
+	} else {
+		t.Logf("Sample application: Name=%s, Path=%s, BundleID=%s", firstApp.Name, firstApp.Path, firstApp.BundleID)
+	}
+}
+
 // Helper function to compare app paths (handles symlinks and normalization)
 func pathsMatch(path1, path2 string) bool {
 	// Clean both paths

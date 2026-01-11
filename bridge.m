@@ -395,6 +395,164 @@ int ListAppsForScheme(const char* scheme, char*** outAppPaths, int* outCount, ch
     }
 }
 
+// List all installed applications on the system
+int ListAllApplications(AppInfo*** outApps, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!outApps || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        *outApps = NULL;
+        *outCount = 0;
+
+        NSMutableArray<NSDictionary*>* appInfoList = [NSMutableArray array];
+        NSFileManager* fileManager = [NSFileManager defaultManager];
+        NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
+
+        // Standard application directories to search
+        NSArray<NSString*>* appDirectories = @[
+            @"/Applications",
+            @"/System/Applications",
+            @"/System/Applications/Utilities",
+            [@"~/Applications" stringByExpandingTildeInPath]
+        ];
+
+        // Enumerate all application directories
+        for (NSString* directory in appDirectories) {
+            BOOL isDirectory;
+            if (![fileManager fileExistsAtPath:directory isDirectory:&isDirectory] || !isDirectory) {
+                continue;
+            }
+
+            NSError* error = nil;
+            NSArray<NSString*>* contents = [fileManager contentsOfDirectoryAtPath:directory error:&error];
+
+            if (error) {
+                continue; // Skip directories we can't read
+            }
+
+            for (NSString* item in contents) {
+                if (![item hasSuffix:@".app"]) {
+                    continue;
+                }
+
+                NSString* fullPath = [directory stringByAppendingPathComponent:item];
+                NSURL* appURL = [NSURL fileURLWithPath:fullPath];
+
+                // Get bundle information
+                NSBundle* bundle = [NSBundle bundleWithURL:appURL];
+                if (!bundle) {
+                    continue;
+                }
+
+                NSString* bundleID = [bundle bundleIdentifier];
+                NSString* appName = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+
+                // Fallback to display name if CFBundleName is not available
+                if (!appName) {
+                    appName = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+                }
+
+                // Fallback to filename without .app extension
+                if (!appName) {
+                    appName = [[item lastPathComponent] stringByDeletingPathExtension];
+                }
+
+                // Store app info
+                NSDictionary* appInfo = @{
+                    @"name": appName ?: @"",
+                    @"path": fullPath,
+                    @"bundleID": bundleID ?: @""
+                };
+
+                [appInfoList addObject:appInfo];
+            }
+        }
+
+        // Also get apps from LaunchServices (catches apps in other locations)
+        NSArray<NSURL*>* allApps = [workspace URLsForApplicationsToOpenContentType:[UTType typeWithIdentifier:@"public.item"]];
+
+        NSMutableSet<NSString*>* existingPaths = [NSMutableSet set];
+        for (NSDictionary* info in appInfoList) {
+            [existingPaths addObject:info[@"path"]];
+        }
+
+        for (NSURL* appURL in allApps) {
+            NSString* fullPath = [appURL path];
+
+            // Skip if we already have this app
+            if ([existingPaths containsObject:fullPath]) {
+                continue;
+            }
+
+            NSBundle* bundle = [NSBundle bundleWithURL:appURL];
+            if (!bundle) {
+                continue;
+            }
+
+            NSString* bundleID = [bundle bundleIdentifier];
+            NSString* appName = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+
+            if (!appName) {
+                appName = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+            }
+
+            if (!appName) {
+                appName = [[[fullPath lastPathComponent] stringByDeletingPathExtension] copy];
+            }
+
+            NSDictionary* appInfo = @{
+                @"name": appName ?: @"",
+                @"path": fullPath,
+                @"bundleID": bundleID ?: @""
+            };
+
+            [appInfoList addObject:appInfo];
+            [existingPaths addObject:fullPath];
+        }
+
+        // Convert to C array
+        *outCount = (int)[appInfoList count];
+
+        if (*outCount == 0) {
+            return BRIDGE_OK;
+        }
+
+        *outApps = (AppInfo**)malloc(sizeof(AppInfo*) * (*outCount));
+        if (!*outApps) {
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        for (int i = 0; i < *outCount; i++) {
+            NSDictionary* appInfo = appInfoList[i];
+
+            (*outApps)[i] = (AppInfo*)malloc(sizeof(AppInfo));
+            if (!(*outApps)[i]) {
+                // Clean up previously allocated memory
+                for (int j = 0; j < i; j++) {
+                    if ((*outApps)[j]->name) free((*outApps)[j]->name);
+                    if ((*outApps)[j]->path) free((*outApps)[j]->path);
+                    if ((*outApps)[j]->bundleID) free((*outApps)[j]->bundleID);
+                    free((*outApps)[j]);
+                }
+                free(*outApps);
+                *outApps = NULL;
+                *outCount = 0;
+                SetError(outError, @"Memory allocation failed");
+                return BRIDGE_ERROR_SYSTEM;
+            }
+
+            (*outApps)[i]->name = NSStringToCString(appInfo[@"name"]);
+            (*outApps)[i]->path = NSStringToCString(appInfo[@"path"]);
+            (*outApps)[i]->bundleID = NSStringToCString(appInfo[@"bundleID"]);
+        }
+
+        return BRIDGE_OK;
+    }
+}
+
 // Free a single C string
 void FreeCString(char* str) {
     if (str) {
@@ -411,5 +569,20 @@ void FreeCStringArray(char** arr, int count) {
             }
         }
         free(arr);
+    }
+}
+
+// Free an array of AppInfo structures
+void FreeAppInfoArray(AppInfo** apps, int count) {
+    if (apps) {
+        for (int i = 0; i < count; i++) {
+            if (apps[i]) {
+                if (apps[i]->name) free(apps[i]->name);
+                if (apps[i]->path) free(apps[i]->path);
+                if (apps[i]->bundleID) free(apps[i]->bundleID);
+                free(apps[i]);
+            }
+        }
+        free(apps);
     }
 }

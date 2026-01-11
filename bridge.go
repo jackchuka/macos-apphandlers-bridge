@@ -318,3 +318,48 @@ func ListAppsForScheme(scheme string) ([]string, error) {
 
 	return appPaths, nil
 }
+
+// AppInfo represents an installed application with its metadata
+type AppInfo struct {
+	Name     string // Application display name
+	Path     string // Full path to application bundle
+	BundleID string // Bundle identifier (e.g., "com.apple.Safari")
+}
+
+// ListAllApplications returns all installed applications on the system
+//
+// Returns:
+//   - apps: Slice of AppInfo structures containing app metadata
+//   - error: Error if any
+func ListAllApplications() ([]AppInfo, error) {
+	var cApps **C.AppInfo
+	var count C.int
+	var cError *C.char
+
+	code := C.ListAllApplications(&cApps, &count, &cError)
+
+	if code != C.BRIDGE_OK {
+		return nil, cErrorToGoError(code, cError)
+	}
+
+	if count == 0 {
+		return []AppInfo{}, nil
+	}
+
+	// Convert C array to Go slice
+	apps := make([]AppInfo, int(count))
+	cAppsSlice := (*[1 << 28]*C.AppInfo)(unsafe.Pointer(cApps))[:count:count]
+
+	for i := 0; i < int(count); i++ {
+		cAppInfo := cAppsSlice[i]
+		apps[i] = AppInfo{
+			Name:     C.GoString(cAppInfo.name),
+			Path:     C.GoString(cAppInfo.path),
+			BundleID: C.GoString(cAppInfo.bundleID),
+		}
+	}
+
+	C.FreeAppInfoArray(cApps, count)
+
+	return apps, nil
+}

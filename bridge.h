@@ -10,6 +10,14 @@
 #define BRIDGE_ERROR_USER_DECLINED -5
 #define BRIDGE_ERROR_NOT_FOUND -6
 
+// Application information structure
+typedef struct
+{
+    char *name;     // Application display name
+    char *path;     // Full path to application bundle
+    char *bundleID; // Bundle identifier (e.g., "com.apple.Safari")
+} AppInfo;
+
 // Get the default application for a UTI
 //
 // Parameters:
@@ -95,5 +103,22 @@ void FreeCString(char *str);
 //   arr: The array of strings to free
 //   count: The number of strings in the array
 void FreeCStringArray(char **arr, int count);
+
+// List all installed applications on the system
+//
+// Parameters:
+//   outApps: Pointer to receive array of AppInfo structures (caller must free using FreeAppInfoArray)
+//   outCount: Pointer to receive count of applications returned
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int ListAllApplications(AppInfo ***outApps, int *outCount, char **outError);
+
+// Free an array of AppInfo structures allocated by bridge functions
+//
+// Parameters:
+//   apps: The array of AppInfo structures to free
+//   count: The number of AppInfo structures in the array
+void FreeAppInfoArray(AppInfo **apps, int count);
 
 #endif // MACOS_APPHANDLERS_BRIDGE_H
