@@ -12,6 +12,9 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
 	"unsafe"
 )
 
@@ -233,6 +236,49 @@ func ResolveUTIsForExtension(extension string) ([]string, error) {
 	return utis, nil
 }
 
+// ResolveExtensionsForUTI returns all file extensions associated with a UTI
+//
+// Parameters:
+//   - uti: The UTI string (e.g., "public.plain-text", "public.html")
+//
+// Returns:
+//   - extensions: Slice of file extensions (without dots)
+//   - error: Error if any
+func ResolveExtensionsForUTI(uti string) ([]string, error) {
+	if uti == "" {
+		return nil, ErrInvalidParameters
+	}
+
+	cUTI := C.CString(uti)
+	defer C.free(unsafe.Pointer(cUTI))
+
+	var cExtensions **C.char
+	var count C.int
+	var cError *C.char
+
+	code := C.GetExtensionsForUTI(cUTI, &cExtensions, &count, &cError)
+
+	if code != C.BRIDGE_OK {
+		return nil, cErrorToGoError(code, cError)
+	}
+
+	if count == 0 {
+		return []string{}, nil
+	}
+
+	// Convert C array to Go slice
+	extensions := make([]string, int(count))
+	cExtensionsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cExtensions))[:count:count]
+
+	for i := 0; i < int(count); i++ {
+		extensions[i] = C.GoString(cExtensionsSlice[i])
+	}
+
+	C.FreeCStringArray(cExtensions, count)
+
+	return extensions, nil
+}
+
 // ListAppsForUTI returns all applications that can open a UTI
 //
 // Parameters:
@@ -326,6 +372,16 @@ type AppInfo struct {
 	BundleID string // Bundle identifier (e.g., "com.apple.Safari")
 }
 
+// DocumentType represents a document type that an application can handle
+type DocumentType struct {
+	TypeName    string   // Human-readable name (e.g., "JPEG Image", "PDF Document")
+	Role        string   // Role: "Editor", "Viewer", "Shell", "None"
+	HandlerRank string   // Handler rank: "Owner", "Default", "Alternate", "None", or empty if not specified
+	UTIs        []string // Array of UTI identifiers
+	Extensions  []string // Array of file extensions
+	IsPackage   bool     // true if this is a package/bundle type
+}
+
 // ListAllApplications returns all installed applications on the system
 //
 // Returns:
@@ -362,4 +418,181 @@ func ListAllApplications() ([]AppInfo, error) {
 	C.FreeAppInfoArray(cApps, count)
 
 	return apps, nil
+}
+
+// getExtensionsForUTIs returns all file extensions for the given UTIs
+func getExtensionsForUTIs(utis []string) []string {
+	extensionsSet := make(map[string]bool)
+
+	for _, uti := range utis {
+		extensions, err := ResolveExtensionsForUTI(uti)
+		if err != nil {
+			continue
+		}
+		for _, ext := range extensions {
+			extensionsSet[ext] = true
+		}
+	}
+
+	// Convert set to sorted slice
+	var result []string
+	for ext := range extensionsSet {
+		result = append(result, ext)
+	}
+	sort.Strings(result)
+
+	return result
+}
+
+// ListDefaultDocumentTypes returns all document types where the given application is the system default
+//
+// This function checks which document types the app supports AND is actually set as the default handler for.
+//
+// Parameters:
+//   - appPath: Full path to the application bundle
+//
+// Returns:
+//   - docTypes: Slice of DocumentType structures where this app is the system default
+//   - error: Error if any
+func ListDefaultDocumentTypes(appPath string) ([]DocumentType, error) {
+	if appPath == "" {
+		return nil, ErrInvalidParameters
+	}
+
+	// Get all document types this app supports
+	allDocTypes, err := ListSupportedDocumentTypes(appPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only those where this app is the default
+	var defaultDocTypes []DocumentType
+
+	// Normalize app path for comparison
+	cleanAppPath := appPath
+	if resolved, err := filepath.EvalSymlinks(appPath); err == nil {
+		cleanAppPath = resolved
+	}
+
+	for _, docType := range allDocTypes {
+		// Collect only the UTIs where this app is actually the default
+		var matchingUTIs []string
+
+		for _, uti := range docType.UTIs {
+			defaultApp, err := GetDefaultAppForUTI(uti)
+			if err != nil {
+				// Skip UTIs that have no default or error
+				continue
+			}
+
+			// Normalize default app path
+			cleanDefaultApp := defaultApp
+			if resolved, err := filepath.EvalSymlinks(defaultApp); err == nil {
+				cleanDefaultApp = resolved
+			}
+
+			// Check if this app is the default for this specific UTI
+			if cleanAppPath == cleanDefaultApp || strings.EqualFold(cleanAppPath, cleanDefaultApp) {
+				matchingUTIs = append(matchingUTIs, uti)
+			}
+		}
+
+		// Only include if at least one UTI matches
+		if len(matchingUTIs) > 0 {
+			// Derive extensions from matching UTIs
+			matchingExtensions := getExtensionsForUTIs(matchingUTIs)
+
+			// Create filtered document type
+			filteredDocType := DocumentType{
+				TypeName:    docType.TypeName,
+				Role:        docType.Role,
+				HandlerRank: docType.HandlerRank,
+				UTIs:        matchingUTIs,
+				Extensions:  matchingExtensions,
+				IsPackage:   docType.IsPackage,
+			}
+
+			defaultDocTypes = append(defaultDocTypes, filteredDocType)
+		}
+	}
+
+	return defaultDocTypes, nil
+}
+
+// ListSupportedDocumentTypes returns all document types that an application can handle
+//
+// This returns what the app CLAIMS it can handle, not what it's the default for.
+//
+// Parameters:
+//   - appPath: Full path to the application bundle
+//
+// Returns:
+//   - docTypes: Slice of DocumentType structures containing detailed info about supported file types
+//   - error: Error if any
+func ListSupportedDocumentTypes(appPath string) ([]DocumentType, error) {
+	if appPath == "" {
+		return nil, ErrInvalidParameters
+	}
+
+	cAppPath := C.CString(appPath)
+	defer C.free(unsafe.Pointer(cAppPath))
+
+	var cDocTypes **C.DocumentType
+	var count C.int
+	var cError *C.char
+
+	code := C.GetSupportedDocumentTypesForApp(cAppPath, &cDocTypes, &count, &cError)
+
+	if code != C.BRIDGE_OK {
+		return nil, cErrorToGoError(code, cError)
+	}
+
+	if count == 0 {
+		return []DocumentType{}, nil
+	}
+
+	// Convert C array to Go slice
+	docTypes := make([]DocumentType, int(count))
+	cDocTypesSlice := (*[1 << 28]*C.DocumentType)(unsafe.Pointer(cDocTypes))[:count:count]
+
+	for i := 0; i < int(count); i++ {
+		cDocType := cDocTypesSlice[i]
+
+		// Convert UTIs array
+		utis := make([]string, int(cDocType.utiCount))
+		if cDocType.utiCount > 0 && cDocType.utis != nil {
+			cUTIsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cDocType.utis))[:cDocType.utiCount:cDocType.utiCount]
+			for j := 0; j < int(cDocType.utiCount); j++ {
+				utis[j] = C.GoString(cUTIsSlice[j])
+			}
+		}
+
+		// Convert extensions array
+		extensions := make([]string, int(cDocType.extensionCount))
+		if cDocType.extensionCount > 0 && cDocType.extensions != nil {
+			cExtensionsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cDocType.extensions))[:cDocType.extensionCount:cDocType.extensionCount]
+			for j := 0; j < int(cDocType.extensionCount); j++ {
+				extensions[j] = C.GoString(cExtensionsSlice[j])
+			}
+		}
+
+		// Get handler rank (may be NULL)
+		handlerRank := ""
+		if cDocType.handlerRank != nil {
+			handlerRank = C.GoString(cDocType.handlerRank)
+		}
+
+		docTypes[i] = DocumentType{
+			TypeName:    C.GoString(cDocType.typeName),
+			Role:        C.GoString(cDocType.role),
+			HandlerRank: handlerRank,
+			UTIs:        utis,
+			Extensions:  extensions,
+			IsPackage:   cDocType.isPackage != 0,
+		}
+	}
+
+	C.FreeDocumentTypeArray(cDocTypes, count)
+
+	return docTypes, nil
 }

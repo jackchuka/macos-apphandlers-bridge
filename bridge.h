@@ -18,6 +18,19 @@ typedef struct
     char *bundleID; // Bundle identifier (e.g., "com.apple.Safari")
 } AppInfo;
 
+// Document type information structure
+typedef struct
+{
+    char *typeName;      // Human-readable name (e.g., "JPEG Image", "PDF Document")
+    char *role;          // Role: "Editor", "Viewer", "Shell", "None"
+    char *handlerRank;   // Handler rank: "Owner", "Default", "Alternate", "None", or NULL if not specified
+    char **utis;         // Array of UTI identifiers
+    int utiCount;        // Number of UTIs
+    char **extensions;   // Array of file extensions
+    int extensionCount;  // Number of extensions
+    int isPackage;       // 1 if this is a package/bundle type, 0 otherwise
+} DocumentType;
+
 // Get the default application for a UTI
 //
 // Parameters:
@@ -68,6 +81,17 @@ int SetDefaultForScheme(const char *appPath, const char *scheme, char **outError
 //
 // Returns: BRIDGE_OK on success, error code otherwise
 int ResolveUTIsForExtension(const char *extension, char ***outUTIs, int *outCount, char **outError);
+
+// Get file extensions for a UTI
+//
+// Parameters:
+//   uti: The UTI string (e.g., "public.plain-text", "public.html")
+//   outExtensions: Pointer to receive array of extension strings (caller must free using FreeCStringArray)
+//   outCount: Pointer to receive count of extensions returned
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int GetExtensionsForUTI(const char *uti, char ***outExtensions, int *outCount, char **outError);
 
 // List all applications that can open a UTI
 //
@@ -120,5 +144,23 @@ int ListAllApplications(AppInfo ***outApps, int *outCount, char **outError);
 //   apps: The array of AppInfo structures to free
 //   count: The number of AppInfo structures in the array
 void FreeAppInfoArray(AppInfo **apps, int count);
+
+// Get supported document types for an application
+//
+// Parameters:
+//   appPath: Full path to the application bundle (e.g., "/Applications/TextEdit.app")
+//   outDocTypes: Pointer to receive array of DocumentType structures (caller must free using FreeDocumentTypeArray)
+//   outCount: Pointer to receive count of document types returned
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int GetSupportedDocumentTypesForApp(const char *appPath, DocumentType ***outDocTypes, int *outCount, char **outError);
+
+// Free an array of DocumentType structures allocated by bridge functions
+//
+// Parameters:
+//   docTypes: The array of DocumentType structures to free
+//   count: The number of DocumentType structures in the array
+void FreeDocumentTypeArray(DocumentType **docTypes, int count);
 
 #endif // MACOS_APPHANDLERS_BRIDGE_H

@@ -177,7 +177,12 @@ int SetDefaultForUTI(const char* appPath, const char* uti, char** outError) {
         }
 
         if (resultError) {
-            SetError(outError, [resultError localizedDescription]);
+            // Provide detailed error information
+            NSString* detailedError = [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
+                                       [resultError localizedDescription],
+                                       [resultError domain],
+                                       (long)[resultError code]];
+            SetError(outError, detailedError);
             [resultError release];
             return resultCode;
         }
@@ -244,7 +249,12 @@ int SetDefaultForScheme(const char* appPath, const char* scheme, char** outError
         }
 
         if (resultError) {
-            SetError(outError, [resultError localizedDescription]);
+            // Provide detailed error information
+            NSString* detailedError = [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
+                                       [resultError localizedDescription],
+                                       [resultError domain],
+                                       (long)[resultError code]];
+            SetError(outError, detailedError);
             [resultError release];
             return resultCode;
         }
@@ -291,6 +301,89 @@ int ResolveUTIsForExtension(const char* extension, char*** outUTIs, int* outCoun
         for (int i = 0; i < *outCount; i++) {
             UTType* type = types[i];
             (*outUTIs)[i] = NSStringToCString([type identifier]);
+        }
+
+        return BRIDGE_OK;
+    }
+}
+
+// Get file extensions for a UTI
+int GetExtensionsForUTI(const char* uti, char*** outExtensions, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!uti || !outExtensions || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_UTI;
+        }
+
+        *outExtensions = NULL;
+        *outCount = 0;
+
+        if (strlen(uti) == 0) {
+            SetError(outError, @"UTI cannot be empty");
+            return BRIDGE_ERROR_INVALID_UTI;
+        }
+
+        NSString* utiString = [NSString stringWithUTF8String:uti];
+        if (!utiString) {
+            SetError(outError, @"Invalid UTF-8 in UTI string");
+            return BRIDGE_ERROR_INVALID_UTI;
+        }
+
+        UTType* utType = [UTType typeWithIdentifier:utiString];
+        if (!utType) {
+            // Not an error - UTI might not exist
+            return BRIDGE_OK;
+        }
+
+        NSMutableSet<NSString*>* extensionsSet = [NSMutableSet set];
+
+        // Get preferred filename extension
+        NSString* preferredExt = [utType preferredFilenameExtension];
+        if (preferredExt && [preferredExt length] > 0) {
+            [extensionsSet addObject:preferredExt];
+        }
+
+        // Get all filename extensions for this UTI
+        NSDictionary* tags = [utType tags];
+        if (tags) {
+            NSArray* fileExtensions = tags[UTTagClassFilenameExtension];
+            if (fileExtensions && [fileExtensions isKindOfClass:[NSArray class]]) {
+                for (id ext in fileExtensions) {
+                    if ([ext isKindOfClass:[NSString class]] && [(NSString*)ext length] > 0) {
+                        [extensionsSet addObject:(NSString*)ext];
+                    }
+                }
+            }
+        }
+
+        if ([extensionsSet count] == 0) {
+            // Not an error - UTI might not have any file extensions
+            return BRIDGE_OK;
+        }
+
+        NSArray* sortedExtensions = [[extensionsSet allObjects] sortedArrayUsingSelector:@selector(compare:)];
+        *outCount = (int)[sortedExtensions count];
+
+        *outExtensions = (char**)malloc(sizeof(char*) * (*outCount));
+        if (!*outExtensions) {
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        for (int i = 0; i < *outCount; i++) {
+            NSString* ext = sortedExtensions[i];
+            (*outExtensions)[i] = strdup([ext UTF8String]);
+            if (!(*outExtensions)[i]) {
+                // Clean up on allocation failure
+                for (int j = 0; j < i; j++) {
+                    free((*outExtensions)[j]);
+                }
+                free(*outExtensions);
+                *outExtensions = NULL;
+                *outCount = 0;
+                SetError(outError, @"Memory allocation failed");
+                return BRIDGE_ERROR_SYSTEM;
+            }
         }
 
         return BRIDGE_OK;
@@ -584,5 +677,269 @@ void FreeAppInfoArray(AppInfo** apps, int count) {
             }
         }
         free(apps);
+    }
+}
+
+// Get supported document types for an application
+int GetSupportedDocumentTypesForApp(const char* appPath, DocumentType*** outDocTypes, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!appPath || !outDocTypes || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        *outDocTypes = NULL;
+        *outCount = 0;
+
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in app path string");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        // Create app URL and verify it exists
+        NSURL* appURL = [NSURL fileURLWithPath:appPathString];
+        if (!appURL) {
+            SetError(outError, [NSString stringWithFormat:@"Invalid application path: %s", appPath]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        if (![[NSFileManager defaultManager] fileExistsAtPath:appPathString]) {
+            SetError(outError, [NSString stringWithFormat:@"Application not found: %s", appPath]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        // Load the application bundle
+        NSBundle* bundle = [NSBundle bundleWithURL:appURL];
+        if (!bundle) {
+            SetError(outError, [NSString stringWithFormat:@"Could not load application bundle: %s", appPath]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        // Get CFBundleDocumentTypes from Info.plist
+        NSArray* documentTypes = [bundle objectForInfoDictionaryKey:@"CFBundleDocumentTypes"];
+
+        if (!documentTypes || ![documentTypes isKindOfClass:[NSArray class]] || [documentTypes count] == 0) {
+            // Not an error - some apps don't declare document types
+            return BRIDGE_OK;
+        }
+
+        // Collect document type info
+        NSMutableArray* docTypeInfoList = [NSMutableArray array];
+
+        for (id docType in documentTypes) {
+            if (![docType isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+
+            NSDictionary* docTypeDict = (NSDictionary*)docType;
+
+            // Get LSItemContentTypes (array of UTI strings)
+            NSArray* contentTypes = docTypeDict[@"LSItemContentTypes"];
+            NSMutableArray* derivedContentTypes = nil;
+
+            // If no LSItemContentTypes, try to derive UTIs from CFBundleTypeExtensions
+            if (!contentTypes || ![contentTypes isKindOfClass:[NSArray class]] || [contentTypes count] == 0) {
+                NSArray* typeExtensions = docTypeDict[@"CFBundleTypeExtensions"];
+                if (typeExtensions && [typeExtensions isKindOfClass:[NSArray class]] && [typeExtensions count] > 0) {
+                    derivedContentTypes = [NSMutableArray array];
+
+                    for (id ext in typeExtensions) {
+                        if ([ext isKindOfClass:[NSString class]] && [(NSString*)ext length] > 0) {
+                            // Convert extension to UTI using UTType API
+                            UTType* utType = [UTType typeWithFilenameExtension:(NSString*)ext];
+                            if (utType && [utType identifier]) {
+                                [derivedContentTypes addObject:[utType identifier]];
+                            }
+                        }
+                    }
+
+                    if ([derivedContentTypes count] > 0) {
+                        contentTypes = derivedContentTypes;
+                    }
+                }
+            }
+
+            // Skip if we still have no content types
+            if (!contentTypes || [contentTypes count] == 0) {
+                continue;
+            }
+
+            // Skip wildcard/generic types that would return too many extensions
+            BOOL hasWildcard = NO;
+            for (id contentType in contentTypes) {
+                if ([contentType isKindOfClass:[NSString class]]) {
+                    NSString* utiString = (NSString*)contentType;
+                    if ([utiString isEqualToString:@"public.item"] ||
+                        [utiString isEqualToString:@"public.data"] ||
+                        [utiString isEqualToString:@"public.content"]) {
+                        hasWildcard = YES;
+                        break;
+                    }
+                }
+            }
+            if (hasWildcard) {
+                continue;
+            }
+
+            // Extract document type information
+            NSString* typeName = docTypeDict[@"CFBundleTypeName"];
+            NSString* role = docTypeDict[@"CFBundleTypeRole"];
+            NSString* handlerRank = docTypeDict[@"LSHandlerRank"];
+            NSNumber* isPackage = docTypeDict[@"LSTypeIsPackage"];
+
+            // Collect all extensions for this document type
+            NSMutableSet<NSString*>* extensionsSet = [NSMutableSet set];
+
+            for (id contentType in contentTypes) {
+                if (![contentType isKindOfClass:[NSString class]]) {
+                    continue;
+                }
+
+                NSString* utiString = (NSString*)contentType;
+                UTType* utType = [UTType typeWithIdentifier:utiString];
+                if (!utType) {
+                    continue;
+                }
+
+                // Get preferred filename extension
+                NSString* preferredExt = [utType preferredFilenameExtension];
+                if (preferredExt && [preferredExt length] > 0) {
+                    [extensionsSet addObject:preferredExt];
+                }
+
+                // Get all filename extensions for this UTI
+                NSDictionary* tags = [utType tags];
+                if (tags) {
+                    NSArray* fileExtensions = tags[UTTagClassFilenameExtension];
+                    if (fileExtensions && [fileExtensions isKindOfClass:[NSArray class]]) {
+                        for (id ext in fileExtensions) {
+                            if ([ext isKindOfClass:[NSString class]] && [(NSString*)ext length] > 0) {
+                                [extensionsSet addObject:(NSString*)ext];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also check for CFBundleTypeExtensions (legacy key)
+            NSArray* typeExtensions = docTypeDict[@"CFBundleTypeExtensions"];
+            if (typeExtensions && [typeExtensions isKindOfClass:[NSArray class]]) {
+                for (id ext in typeExtensions) {
+                    if ([ext isKindOfClass:[NSString class]] && [(NSString*)ext length] > 0) {
+                        [extensionsSet addObject:(NSString*)ext];
+                    }
+                }
+            }
+
+            // Create document type info dictionary
+            NSDictionary* docTypeInfo = @{
+                @"typeName": typeName ?: @"",
+                @"role": role ?: @"",
+                @"handlerRank": handlerRank ?: [NSNull null],
+                @"utis": contentTypes,
+                @"extensions": [[extensionsSet allObjects] sortedArrayUsingSelector:@selector(compare:)],
+                @"isPackage": isPackage ?: @NO
+            };
+
+            [docTypeInfoList addObject:docTypeInfo];
+        }
+
+        // Convert to C array
+        *outCount = (int)[docTypeInfoList count];
+
+        if (*outCount == 0) {
+            return BRIDGE_OK;
+        }
+
+        *outDocTypes = (DocumentType**)malloc(sizeof(DocumentType*) * (*outCount));
+        if (!*outDocTypes) {
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        for (int i = 0; i < *outCount; i++) {
+            NSDictionary* docTypeInfo = docTypeInfoList[i];
+
+            (*outDocTypes)[i] = (DocumentType*)malloc(sizeof(DocumentType));
+            if (!(*outDocTypes)[i]) {
+                // Clean up previously allocated memory
+                for (int j = 0; j < i; j++) {
+                    FreeDocumentTypeArray(*outDocTypes, j);
+                }
+                free(*outDocTypes);
+                *outDocTypes = NULL;
+                *outCount = 0;
+                SetError(outError, @"Memory allocation failed");
+                return BRIDGE_ERROR_SYSTEM;
+            }
+
+            // Set type name
+            (*outDocTypes)[i]->typeName = NSStringToCString(docTypeInfo[@"typeName"]);
+
+            // Set role
+            (*outDocTypes)[i]->role = NSStringToCString(docTypeInfo[@"role"]);
+
+            // Set handler rank (may be NULL)
+            id handlerRank = docTypeInfo[@"handlerRank"];
+            if (handlerRank != [NSNull null]) {
+                (*outDocTypes)[i]->handlerRank = NSStringToCString(handlerRank);
+            } else {
+                (*outDocTypes)[i]->handlerRank = NULL;
+            }
+
+            // Set UTIs array
+            NSArray* utis = docTypeInfo[@"utis"];
+            (*outDocTypes)[i]->utiCount = (int)[utis count];
+            (*outDocTypes)[i]->utis = (char**)malloc(sizeof(char*) * (*outDocTypes)[i]->utiCount);
+            for (int j = 0; j < (*outDocTypes)[i]->utiCount; j++) {
+                (*outDocTypes)[i]->utis[j] = NSStringToCString(utis[j]);
+            }
+
+            // Set extensions array
+            NSArray* extensions = docTypeInfo[@"extensions"];
+            (*outDocTypes)[i]->extensionCount = (int)[extensions count];
+            (*outDocTypes)[i]->extensions = (char**)malloc(sizeof(char*) * (*outDocTypes)[i]->extensionCount);
+            for (int j = 0; j < (*outDocTypes)[i]->extensionCount; j++) {
+                (*outDocTypes)[i]->extensions[j] = NSStringToCString(extensions[j]);
+            }
+
+            // Set isPackage flag
+            (*outDocTypes)[i]->isPackage = [docTypeInfo[@"isPackage"] boolValue] ? 1 : 0;
+        }
+
+        return BRIDGE_OK;
+    }
+}
+
+// Free an array of DocumentType structures
+void FreeDocumentTypeArray(DocumentType** docTypes, int count) {
+    if (docTypes) {
+        for (int i = 0; i < count; i++) {
+            if (docTypes[i]) {
+                if (docTypes[i]->typeName) free(docTypes[i]->typeName);
+                if (docTypes[i]->role) free(docTypes[i]->role);
+                if (docTypes[i]->handlerRank) free(docTypes[i]->handlerRank);
+
+                // Free UTIs array
+                if (docTypes[i]->utis) {
+                    for (int j = 0; j < docTypes[i]->utiCount; j++) {
+                        if (docTypes[i]->utis[j]) free(docTypes[i]->utis[j]);
+                    }
+                    free(docTypes[i]->utis);
+                }
+
+                // Free extensions array
+                if (docTypes[i]->extensions) {
+                    for (int j = 0; j < docTypes[i]->extensionCount; j++) {
+                        if (docTypes[i]->extensions[j]) free(docTypes[i]->extensions[j]);
+                    }
+                    free(docTypes[i]->extensions);
+                }
+
+                free(docTypes[i]);
+            }
+        }
+        free(docTypes);
     }
 }

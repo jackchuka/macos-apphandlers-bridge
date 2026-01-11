@@ -132,6 +132,87 @@ func TestGetDefaultAppForScheme(t *testing.T) {
 	}
 }
 
+// TestResolveExtensionsForUTI tests resolving file extensions for a UTI
+func TestResolveExtensionsForUTI(t *testing.T) {
+	tests := []struct {
+		name        string
+		uti         string
+		wantErr     bool
+		minExtCount int
+		mustContain []string
+	}{
+		{
+			name:        "HTML UTI",
+			uti:         "public.html",
+			minExtCount: 1,
+			mustContain: []string{"html"},
+			wantErr:     false,
+		},
+		{
+			name:        "Plain text UTI",
+			uti:         "public.plain-text",
+			minExtCount: 1,
+			mustContain: []string{"txt"},
+			wantErr:     false,
+		},
+		{
+			name:        "JPEG UTI",
+			uti:         "public.jpeg",
+			minExtCount: 1,
+			mustContain: []string{"jpg"},
+			wantErr:     false,
+		},
+		{
+			name:    "Empty UTI",
+			uti:     "",
+			wantErr: true,
+		},
+		{
+			name:        "Folder UTI (no extensions)",
+			uti:         "public.folder",
+			minExtCount: 0,
+			wantErr:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extensions, err := ResolveExtensionsForUTI(tt.uti)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ResolveExtensionsForUTI() expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ResolveExtensionsForUTI() error = %v", err)
+				return
+			}
+
+			if len(extensions) < tt.minExtCount {
+				t.Errorf("ResolveExtensionsForUTI() got %d extensions, want at least %d", len(extensions), tt.minExtCount)
+			}
+
+			// Check that required extensions are present
+			for _, required := range tt.mustContain {
+				found := false
+				for _, ext := range extensions {
+					if ext == required {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ResolveExtensionsForUTI() missing required extension %s in result %v", required, extensions)
+				}
+			}
+
+			t.Logf("Extensions for %s: %v", tt.uti, extensions)
+		})
+	}
+}
+
 // TestResolveUTIsForExtension tests extension to UTI resolution
 func TestResolveUTIsForExtension(t *testing.T) {
 	tests := []struct {
@@ -416,6 +497,143 @@ func TestListAllApplications(t *testing.T) {
 	} else {
 		t.Logf("Sample application: Name=%s, Path=%s, BundleID=%s", firstApp.Name, firstApp.Path, firstApp.BundleID)
 	}
+}
+
+// TestListSupportedDocumentTypes tests listing supported document types for an application
+func TestListSupportedDocumentTypes(t *testing.T) {
+	// Test with TextEdit - should exist on all macOS systems
+	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
+		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
+	}
+
+	docTypes, err := ListSupportedDocumentTypes(textEditPath)
+	if err != nil {
+		t.Fatalf("ListSupportedDocumentTypes() error = %v", err)
+	}
+
+	// TextEdit should support at least some document types
+	if len(docTypes) == 0 {
+		t.Errorf("ListSupportedDocumentTypes() returned zero document types for TextEdit")
+	}
+
+	// Verify structure is valid
+	for i, docType := range docTypes {
+		// Role should not be empty
+		if docType.Role == "" {
+			t.Errorf("ListSupportedDocumentTypes() returned empty role at index %d", i)
+		}
+
+		// Should have at least one UTI
+		if len(docType.UTIs) == 0 {
+			t.Errorf("ListSupportedDocumentTypes() returned zero UTIs at index %d", i)
+		}
+
+		// Check UTIs are non-empty
+		for j, uti := range docType.UTIs {
+			if uti == "" {
+				t.Errorf("ListSupportedDocumentTypes() returned empty UTI at index %d,%d", i, j)
+			}
+		}
+
+		// Extensions array can be empty (some UTIs don't have extensions)
+		// but if present, should be non-empty strings
+		for j, ext := range docType.Extensions {
+			if ext == "" {
+				t.Errorf("ListSupportedDocumentTypes() returned empty extension at index %d,%d", i, j)
+			}
+		}
+
+		t.Logf("Document type %d: Name=%q, Role=%q, HandlerRank=%q, UTIs=%v, Extensions=%v, IsPackage=%v",
+			i, docType.TypeName, docType.Role, docType.HandlerRank, docType.UTIs, docType.Extensions, docType.IsPackage)
+	}
+
+	t.Logf("TextEdit supports %d document types", len(docTypes))
+}
+
+// TestListSupportedDocumentTypes_ErrorCases tests error handling
+func TestListSupportedDocumentTypes_ErrorCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		appPath string
+	}{
+		{
+			name:    "non-existent app",
+			appPath: "/Applications/NonExistent.app",
+		},
+		{
+			name:    "empty path",
+			appPath: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docTypes, err := ListSupportedDocumentTypes(tt.appPath)
+			if err == nil {
+				t.Errorf("ListSupportedDocumentTypes() expected error, got nil with docTypes: %v", docTypes)
+			} else {
+				t.Logf("Got expected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestListDefaultDocumentTypes tests listing document types where an app is the system default
+func TestListDefaultDocumentTypes(t *testing.T) {
+	// Test with TextEdit - should exist on all macOS systems
+	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
+		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
+	}
+
+	defaultDocTypes, err := ListDefaultDocumentTypes(textEditPath)
+	if err != nil {
+		t.Fatalf("ListDefaultDocumentTypes() error = %v", err)
+	}
+
+	// TextEdit may or may not be the default for any types (depends on system configuration)
+	// So we can't assert a minimum count, but we can validate structure if any are returned
+	t.Logf("TextEdit is the default for %d document types", len(defaultDocTypes))
+
+	for i, docType := range defaultDocTypes {
+		// Verify structure is valid
+		if docType.Role == "" {
+			t.Errorf("ListDefaultDocumentTypes() returned empty role at index %d", i)
+		}
+
+		if len(docType.UTIs) == 0 {
+			t.Errorf("ListDefaultDocumentTypes() returned zero UTIs at index %d", i)
+		}
+
+		// Verify that this app IS actually the default for ALL returned UTIs (not just some)
+		for _, uti := range docType.UTIs {
+			defaultApp, err := GetDefaultAppForUTI(uti)
+			if err != nil {
+				t.Errorf("ListDefaultDocumentTypes() returned UTI %s at index %d, but got error when checking default: %v", uti, i, err)
+				continue
+			}
+
+			if !pathsMatch(defaultApp, textEditPath) {
+				t.Errorf("ListDefaultDocumentTypes() returned UTI %s at index %d, but TextEdit is not the default (default is %s)",
+					uti, i, defaultApp)
+			}
+		}
+
+		t.Logf("Default document type %d: Name=%q, Role=%q, UTIs=%v, Extensions=%v",
+			i, docType.TypeName, docType.Role, docType.UTIs, docType.Extensions)
+	}
+
+	// Also verify that we're filtering correctly - supported types should be >= default types
+	supportedDocTypes, err := ListSupportedDocumentTypes(textEditPath)
+	if err != nil {
+		t.Fatalf("ListSupportedDocumentTypes() error = %v", err)
+	}
+
+	if len(defaultDocTypes) > len(supportedDocTypes) {
+		t.Errorf("ListDefaultDocumentTypes() returned %d types, but ListSupportedDocumentTypes() returned %d - default should be a subset",
+			len(defaultDocTypes), len(supportedDocTypes))
+	}
+
+	t.Logf("TextEdit supports %d types total, is default for %d", len(supportedDocTypes), len(defaultDocTypes))
 }
 
 // Helper function to compare app paths (handles symlinks and normalization)
