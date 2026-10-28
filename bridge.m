@@ -263,6 +263,94 @@ int SetDefaultForScheme(const char* appPath, const char* scheme, char** outError
     }
 }
 
+// LaunchServices handler preferences (the same store Finder's "Change All" writes to)
+static CFStringRef const kLaunchServicesPrefsDomain = CFSTR("com.apple.LaunchServices/com.apple.launchservices.secure");
+
+// Set the default application for a file extension by tag
+int SetDefaultForExtension(const char* appPath, const char* extension, char** outError) {
+    @autoreleasepool {
+        if (!appPath || !extension) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        NSString* extString = [NSString stringWithUTF8String:extension];
+
+        if (!appPathString || !extString || [extString length] == 0) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSBundle* bundle = [NSBundle bundleWithPath:appPathString];
+        NSString* bundleID = [bundle bundleIdentifier];
+        if (!bundleID) {
+            SetError(outError, [NSString stringWithFormat:@"Application not found or has no bundle identifier: %s", appPath]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSString* tagClass = (NSString*)UTTagClassFilenameExtension;
+
+        CFPropertyListRef current = CFPreferencesCopyAppValue(CFSTR("LSHandlers"), kLaunchServicesPrefsDomain);
+        NSMutableArray* handlers = [NSMutableArray array];
+        if (current) {
+            if (CFGetTypeID(current) == CFArrayGetTypeID()) {
+                for (id entry in (NSArray*)current) {
+                    if ([entry isKindOfClass:[NSDictionary class]] &&
+                        [entry[@"LSHandlerContentTagClass"] isEqual:tagClass] &&
+                        [entry[@"LSHandlerContentTag"] isKindOfClass:[NSString class]] &&
+                        [entry[@"LSHandlerContentTag"] caseInsensitiveCompare:extString] == NSOrderedSame) {
+                        continue;
+                    }
+                    [handlers addObject:entry];
+                }
+            }
+            CFRelease(current);
+        }
+
+        [handlers insertObject:@{
+            @"LSHandlerContentTag": [extString lowercaseString],
+            @"LSHandlerContentTagClass": tagClass,
+            @"LSHandlerRoleAll": [bundleID lowercaseString],
+            @"LSHandlerPreferredVersions": @{@"LSHandlerRoleAll": @"-"},
+            @"LSHandlerModificationDate": @((long long)CFAbsoluteTimeGetCurrent()),
+        } atIndex:0];
+
+        CFPreferencesSetAppValue(CFSTR("LSHandlers"), (CFArrayRef)handlers, kLaunchServicesPrefsDomain);
+        if (!CFPreferencesAppSynchronize(kLaunchServicesPrefsDomain)) {
+            SetError(outError, @"Failed to write LaunchServices preferences");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        // lsd only reads handler preferences at startup; launchd respawns it on demand
+        NSTask* task = [[[NSTask alloc] init] autorelease];
+        [task setExecutableURL:[NSURL fileURLWithPath:@"/usr/bin/killall"]];
+        [task setArguments:@[@"lsd"]];
+        [task setStandardError:[NSFileHandle fileHandleWithNullDevice]];
+        NSError* taskError = nil;
+        if (![task launchAndReturnError:&taskError]) {
+            SetError(outError, [NSString stringWithFormat:@"Failed to restart lsd: %@", [taskError localizedDescription]]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        [task waitUntilExit];
+
+        // Lookups made before the restart are cached in-process for a few seconds;
+        // wait until the new handler is visible so callers can verify immediately
+        UTType* utType = [UTType typeWithFilenameExtension:extString];
+        NSURL* expected = [[NSURL fileURLWithPath:appPathString] URLByResolvingSymlinksInPath];
+        for (int i = 0; i < 50; i++) {
+            NSURL* actual = [[[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType] URLByResolvingSymlinksInPath];
+            if (actual && [[actual path] caseInsensitiveCompare:[expected path]] == NSOrderedSame) {
+                return BRIDGE_OK;
+            }
+            [NSThread sleepForTimeInterval:0.1];
+        }
+
+        SetError(outError, [NSString stringWithFormat:@"Handler for .%s was written but LaunchServices did not apply it", extension]);
+        return BRIDGE_ERROR_SYSTEM;
+    }
+}
+
 // Resolve file extension to UTI(s)
 int ResolveUTIsForExtension(const char* extension, char*** outUTIs, int* outCount, char** outError) {
     @autoreleasepool {

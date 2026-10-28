@@ -9,6 +9,7 @@ Provides Go bindings to:
 
 - Query and set default applications for UTIs (file types)
 - Query and set default applications for URL schemes
+- Set default applications for file extensions that no app declares (dynamic UTIs)
 - Resolve file extensions to UTIs
 - List all capable application handlers
 - List all installed applications with metadata (name, path, bundle ID)
@@ -473,6 +474,27 @@ Sets the default application for a given URL scheme. This operation may prompt t
 
 ```go
 err := bridge.SetDefaultForScheme("/Applications/Firefox.app", "http")
+```
+
+#### `SetDefaultForExtension(appPath, extension string) error`
+
+Sets the default application for a file extension, the same way Finder's "Get Info → Open with → Change All…" does. Use it for extensions that no installed app declares: they resolve to dynamic (`dyn.*`) UTIs, which `SetDefaultForUTI` cannot set.
+
+It writes an extension-keyed handler (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` so the change applies immediately, and waits until the new default is visible. The preference format is undocumented by Apple and may change in future macOS releases.
+
+**Parameters:**
+
+- `appPath` - Full path to the application bundle
+- `extension` - File extension without the dot (e.g., "tf")
+
+**Returns:**
+
+- Error if the app is invalid, the preferences cannot be written, or LaunchServices does not apply the change
+
+**Example:**
+
+```go
+err := bridge.SetDefaultForExtension("/Applications/Visual Studio Code.app", "tf")
 ```
 
 ## Error Handling
