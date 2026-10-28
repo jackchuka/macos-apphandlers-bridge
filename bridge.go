@@ -193,6 +193,37 @@ func SetDefaultForScheme(appPath, scheme string) error {
 	return cErrorToGoError(code, cError)
 }
 
+// SetDefaultForExtension sets the default application for a file extension
+//
+// It writes the same extension-keyed LaunchServices handler as Finder's
+// "Change All", so it works for extensions that resolve to dynamic (dyn.*)
+// UTIs, which SetDefaultForUTI cannot set. lsd is restarted to apply it.
+//
+// Parameters:
+//   - appPath: Full path to the application bundle
+//   - extension: File extension without dot (e.g., "tf")
+//
+// Returns:
+//   - error: Error if any
+func SetDefaultForExtension(appPath, extension string) error {
+	extension = strings.TrimPrefix(extension, ".")
+	if appPath == "" || extension == "" {
+		return ErrInvalidParameters
+	}
+
+	cAppPath := C.CString(appPath)
+	defer C.free(unsafe.Pointer(cAppPath))
+
+	cExt := C.CString(extension)
+	defer C.free(unsafe.Pointer(cExt))
+
+	var cError *C.char
+
+	code := C.SetDefaultForExtension(cAppPath, cExt, &cError)
+
+	return cErrorToGoError(code, cError)
+}
+
 // ResolveUTIsForExtension resolves a file extension to one or more UTIs
 //
 // Parameters:

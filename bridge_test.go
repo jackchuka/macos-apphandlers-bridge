@@ -3,7 +3,9 @@
 package bridge
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -376,6 +378,74 @@ func TestSetDefaultForUTI_InvalidApp(t *testing.T) {
 				t.Errorf("SetDefaultForUTI() expected error for invalid input, got nil")
 			}
 			t.Logf("Got expected error: %v", err)
+		})
+	}
+}
+
+// TestSetDefaultForExtension_DynamicUTI tests setting a default for an extension
+// that no app declares, which resolves to a dynamic UTI that SetDefaultForUTI rejects
+func TestSetDefaultForExtension_DynamicUTI(t *testing.T) {
+	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
+		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
+	}
+
+	const ext = "bridgetestdyn"
+	const domain = "com.apple.LaunchServices/com.apple.launchservices.secure"
+
+	utis, err := ResolveUTIsForExtension(ext)
+	if err != nil || len(utis) == 0 || !strings.HasPrefix(utis[0], "dyn.") {
+		t.Fatalf("expected .%s to resolve to a dynamic UTI, got %v (err: %v)", ext, utis, err)
+	}
+	dynUTI := utis[0]
+
+	backup, err := exec.Command("defaults", "export", domain, "-").Output()
+	if err != nil {
+		t.Fatalf("failed to back up LaunchServices preferences: %v", err)
+	}
+	t.Cleanup(func() {
+		restore := exec.Command("defaults", "import", domain, "-")
+		restore.Stdin = bytes.NewReader(backup)
+		if err := restore.Run(); err != nil {
+			t.Errorf("failed to restore LaunchServices preferences: %v", err)
+		}
+		_ = exec.Command("killall", "lsd").Run()
+	})
+
+	if err := SetDefaultForUTI(textEditPath, dynUTI); err == nil {
+		t.Logf("SetDefaultForUTI unexpectedly accepted dynamic UTI %s", dynUTI)
+	}
+
+	if err := SetDefaultForExtension(textEditPath, ext); err != nil {
+		t.Fatalf("SetDefaultForExtension() error = %v", err)
+	}
+
+	currentApp, err := GetDefaultAppForUTI(dynUTI)
+	if err != nil {
+		t.Fatalf("Failed to verify default app: %v", err)
+	}
+	if !pathsMatch(currentApp, textEditPath) {
+		t.Errorf("SetDefaultForExtension() verification failed: got %s, want %s", currentApp, textEditPath)
+	}
+}
+
+// TestSetDefaultForExtension_InvalidInput tests error handling for invalid input
+func TestSetDefaultForExtension_InvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		appPath string
+		ext     string
+	}{
+		{name: "non-existent app", appPath: "/Applications/NonExistent.app", ext: "bridgetestdyn"},
+		{name: "empty app path", appPath: "", ext: "bridgetestdyn"},
+		{name: "empty extension", appPath: textEditPath, ext: ""},
+		{name: "dot only", appPath: textEditPath, ext: "."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := SetDefaultForExtension(tt.appPath, tt.ext); err == nil {
+				t.Errorf("SetDefaultForExtension() expected error for invalid input, got nil")
+			}
 		})
 	}
 }

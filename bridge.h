@@ -71,6 +71,21 @@ int SetDefaultForUTI(const char *appPath, const char *uti, char **outError);
 // Returns: BRIDGE_OK on success, error code otherwise
 int SetDefaultForScheme(const char *appPath, const char *scheme, char **outError);
 
+// Set the default application for a file extension
+//
+// Writes an extension-keyed LaunchServices handler, the same entry Finder's
+// "Change All" creates. Unlike SetDefaultForUTI, this works for extensions that
+// resolve to dynamic (dyn.*) UTIs because no installed app declares them.
+// Restarts lsd so the change takes effect immediately.
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   extension: File extension without dot (e.g., "tf")
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int SetDefaultForExtension(const char *appPath, const char *extension, char **outError);
+
 // Resolve file extension to UTI(s)
 //
 // Parameters:
