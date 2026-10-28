@@ -19,7 +19,7 @@ Provides Go bindings to:
 - macOS 12.0 (Monterey) or later
 - CGO enabled (`CGO_ENABLED=1`)
 - Xcode Command Line Tools installed
-- Go 1.21 or later
+- Go 1.27 or later
 
 ## Installation
 
