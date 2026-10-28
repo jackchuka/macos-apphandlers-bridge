@@ -266,20 +266,28 @@ int SetDefaultForScheme(const char* appPath, const char* scheme, char** outError
 // LaunchServices handler preferences (the same store Finder's "Change All" writes to)
 static CFStringRef const kLaunchServicesPrefsDomain = CFSTR("com.apple.LaunchServices/com.apple.launchservices.secure");
 
-// Set the default application for a file extension by tag
-int SetDefaultForExtension(const char* appPath, const char* extension, char** outError) {
+// Set the default application for file extensions by tag
+int SetDefaultForExtensions(const char* appPath, const char** extensions, int count, char** outError) {
     @autoreleasepool {
-        if (!appPath || !extension) {
+        if (!appPath || !extensions || count <= 0) {
             SetError(outError, @"Invalid parameters");
             return BRIDGE_ERROR_INVALID_APP;
         }
 
         NSString* appPathString = [NSString stringWithUTF8String:appPath];
-        NSString* extString = [NSString stringWithUTF8String:extension];
-
-        if (!appPathString || !extString || [extString length] == 0) {
+        if (!appPathString) {
             SetError(outError, @"Invalid UTF-8 in parameters");
             return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSMutableOrderedSet<NSString*>* exts = [NSMutableOrderedSet orderedSet];
+        for (int i = 0; i < count; i++) {
+            NSString* ext = extensions[i] ? [NSString stringWithUTF8String:extensions[i]] : nil;
+            if (!ext || [ext length] == 0) {
+                SetError(outError, @"Invalid extension in parameters");
+                return BRIDGE_ERROR_INVALID_APP;
+            }
+            [exts addObject:[ext lowercaseString]];
         }
 
         NSBundle* bundle = [NSBundle bundleWithPath:appPathString];
@@ -299,7 +307,7 @@ int SetDefaultForExtension(const char* appPath, const char* extension, char** ou
                     if ([entry isKindOfClass:[NSDictionary class]] &&
                         [entry[@"LSHandlerContentTagClass"] isEqual:tagClass] &&
                         [entry[@"LSHandlerContentTag"] isKindOfClass:[NSString class]] &&
-                        [entry[@"LSHandlerContentTag"] caseInsensitiveCompare:extString] == NSOrderedSame) {
+                        [exts containsObject:[entry[@"LSHandlerContentTag"] lowercaseString]]) {
                         continue;
                     }
                     [handlers addObject:entry];
@@ -308,13 +316,17 @@ int SetDefaultForExtension(const char* appPath, const char* extension, char** ou
             CFRelease(current);
         }
 
-        [handlers insertObject:@{
-            @"LSHandlerContentTag": [extString lowercaseString],
-            @"LSHandlerContentTagClass": tagClass,
-            @"LSHandlerRoleAll": [bundleID lowercaseString],
-            @"LSHandlerPreferredVersions": @{@"LSHandlerRoleAll": @"-"},
-            @"LSHandlerModificationDate": @((long long)CFAbsoluteTimeGetCurrent()),
-        } atIndex:0];
+        NSNumber* modified = @((long long)CFAbsoluteTimeGetCurrent());
+        NSUInteger index = 0;
+        for (NSString* ext in exts) {
+            [handlers insertObject:@{
+                @"LSHandlerContentTag": ext,
+                @"LSHandlerContentTagClass": tagClass,
+                @"LSHandlerRoleAll": [bundleID lowercaseString],
+                @"LSHandlerPreferredVersions": @{@"LSHandlerRoleAll": @"-"},
+                @"LSHandlerModificationDate": modified,
+            } atIndex:index++];
+        }
 
         CFPreferencesSetAppValue(CFSTR("LSHandlers"), (CFArrayRef)handlers, kLaunchServicesPrefsDomain);
         if (!CFPreferencesAppSynchronize(kLaunchServicesPrefsDomain)) {
@@ -322,7 +334,8 @@ int SetDefaultForExtension(const char* appPath, const char* extension, char** ou
             return BRIDGE_ERROR_SYSTEM;
         }
 
-        // lsd only reads handler preferences at startup; launchd respawns it on demand
+        // lsd only reads handler preferences at startup; launchd respawns it on demand.
+        // Restart once per batch: repeated restarts in quick succession are throttled.
         NSTask* task = [[[NSTask alloc] init] autorelease];
         [task setExecutableURL:[NSURL fileURLWithPath:@"/usr/bin/killall"]];
         [task setArguments:@[@"lsd"]];
@@ -334,20 +347,30 @@ int SetDefaultForExtension(const char* appPath, const char* extension, char** ou
         }
         [task waitUntilExit];
 
-        // Lookups made before the restart are cached in-process for a few seconds;
-        // wait until the new handler is visible so callers can verify immediately
-        UTType* utType = [UTType typeWithFilenameExtension:extString];
-        NSURL* expected = [[NSURL fileURLWithPath:appPathString] URLByResolvingSymlinksInPath];
-        for (int i = 0; i < 50; i++) {
-            NSURL* actual = [[[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType] URLByResolvingSymlinksInPath];
-            if (actual && [[actual path] caseInsensitiveCompare:[expected path]] == NSOrderedSame) {
-                return BRIDGE_OK;
+        // Wait until every new handler is visible so callers can verify immediately.
+        // launchd delays respawning lsd by up to ~20s when it was restarted shortly before.
+        NSString* expected = [[[NSURL fileURLWithPath:appPathString] URLByResolvingSymlinksInPath] path];
+        NSMutableOrderedSet<NSString*>* pending = [[exts mutableCopy] autorelease];
+        for (int i = 0; i < 300 && [pending count] > 0; i++) {
+            for (NSString* ext in [[pending copy] autorelease]) {
+                UTType* utType = [UTType typeWithFilenameExtension:ext];
+                NSString* actual = [[[[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType] URLByResolvingSymlinksInPath] path];
+                if (actual && [actual caseInsensitiveCompare:expected] == NSOrderedSame) {
+                    [pending removeObject:ext];
+                }
             }
-            [NSThread sleepForTimeInterval:0.1];
+            if ([pending count] > 0) {
+                [NSThread sleepForTimeInterval:0.1];
+            }
         }
 
-        SetError(outError, [NSString stringWithFormat:@"Handler for .%s was written but LaunchServices did not apply it", extension]);
-        return BRIDGE_ERROR_SYSTEM;
+        if ([pending count] > 0) {
+            SetError(outError, [NSString stringWithFormat:@"Handlers were written but LaunchServices did not apply them for: .%@",
+                                [[pending array] componentsJoinedByString:@", ."]]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+
+        return BRIDGE_OK;
     }
 }
 

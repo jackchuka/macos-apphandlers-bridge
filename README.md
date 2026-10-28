@@ -476,25 +476,25 @@ Sets the default application for a given URL scheme. This operation may prompt t
 err := bridge.SetDefaultForScheme("/Applications/Firefox.app", "http")
 ```
 
-#### `SetDefaultForExtension(appPath, extension string) error`
+#### `SetDefaultForExtensions(appPath string, extensions []string) error`
 
-Sets the default application for a file extension, the same way Finder's "Get Info → Open with → Change All…" does. Use it for extensions that no installed app declares: they resolve to dynamic (`dyn.*`) UTIs, which `SetDefaultForUTI` cannot set.
+Sets the default application for file extensions, the same way Finder's "Get Info → Open with → Change All…" does. Use it for extensions that no installed app declares: they resolve to dynamic (`dyn.*`) UTIs, which `SetDefaultForUTI` cannot set.
 
-It writes an extension-keyed handler (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` so the change applies immediately, and waits until the new default is visible. The preference format is undocumented by Apple and may change in future macOS releases.
+It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` once so the changes apply immediately, and waits until every new default is visible (usually within a couple of seconds, up to 30s). Pass all extensions for an app in one call: launchd delays respawning `lsd` when it was restarted shortly before, so each extra call can add several seconds. The preference format is undocumented by Apple and may change in future macOS releases.
 
 **Parameters:**
 
 - `appPath` - Full path to the application bundle
-- `extension` - File extension without the dot (e.g., "tf")
+- `extensions` - File extensions without the dot (e.g., "tf")
 
 **Returns:**
 
-- Error if the app is invalid, the preferences cannot be written, or LaunchServices does not apply the change
+- Error if the app is invalid, the preferences cannot be written, or LaunchServices does not apply the change (the message lists the extensions that were not applied)
 
 **Example:**
 
 ```go
-err := bridge.SetDefaultForExtension("/Applications/Visual Studio Code.app", "tf")
+err := bridge.SetDefaultForExtensions("/Applications/Visual Studio Code.app", []string{"tf", "tfvars"})
 ```
 
 ## Error Handling
