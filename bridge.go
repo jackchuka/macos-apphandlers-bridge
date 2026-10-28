@@ -256,7 +256,7 @@ func ResolveUTIsForExtension(extension string) ([]string, error) {
 
 	// Convert C array to Go slice
 	utis := make([]string, int(count))
-	cUTIsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cUTIs))[:count:count]
+	cUTIsSlice := unsafe.Slice(cUTIs, count)
 
 	for i := 0; i < int(count); i++ {
 		utis[i] = C.GoString(cUTIsSlice[i])
@@ -299,7 +299,7 @@ func ResolveExtensionsForUTI(uti string) ([]string, error) {
 
 	// Convert C array to Go slice
 	extensions := make([]string, int(count))
-	cExtensionsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cExtensions))[:count:count]
+	cExtensionsSlice := unsafe.Slice(cExtensions, count)
 
 	for i := 0; i < int(count); i++ {
 		extensions[i] = C.GoString(cExtensionsSlice[i])
@@ -342,7 +342,7 @@ func ListAppsForUTI(uti string) ([]string, error) {
 
 	// Convert C array to Go slice
 	appPaths := make([]string, int(count))
-	cAppPathsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cAppPaths))[:count:count]
+	cAppPathsSlice := unsafe.Slice(cAppPaths, count)
 
 	for i := 0; i < int(count); i++ {
 		appPaths[i] = C.GoString(cAppPathsSlice[i])
@@ -385,7 +385,7 @@ func ListAppsForScheme(scheme string) ([]string, error) {
 
 	// Convert C array to Go slice
 	appPaths := make([]string, int(count))
-	cAppPathsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cAppPaths))[:count:count]
+	cAppPathsSlice := unsafe.Slice(cAppPaths, count)
 
 	for i := 0; i < int(count); i++ {
 		appPaths[i] = C.GoString(cAppPathsSlice[i])
@@ -435,7 +435,7 @@ func ListAllApplications() ([]AppInfo, error) {
 
 	// Convert C array to Go slice
 	apps := make([]AppInfo, int(count))
-	cAppsSlice := (*[1 << 28]*C.AppInfo)(unsafe.Pointer(cApps))[:count:count]
+	cAppsSlice := unsafe.Slice(cApps, count)
 
 	for i := 0; i < int(count); i++ {
 		cAppInfo := cAppsSlice[i]
@@ -584,7 +584,7 @@ func ListSupportedDocumentTypes(appPath string) ([]DocumentType, error) {
 
 	// Convert C array to Go slice
 	docTypes := make([]DocumentType, int(count))
-	cDocTypesSlice := (*[1 << 28]*C.DocumentType)(unsafe.Pointer(cDocTypes))[:count:count]
+	cDocTypesSlice := unsafe.Slice(cDocTypes, count)
 
 	for i := 0; i < int(count); i++ {
 		cDocType := cDocTypesSlice[i]
@@ -592,7 +592,7 @@ func ListSupportedDocumentTypes(appPath string) ([]DocumentType, error) {
 		// Convert UTIs array
 		utis := make([]string, int(cDocType.utiCount))
 		if cDocType.utiCount > 0 && cDocType.utis != nil {
-			cUTIsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cDocType.utis))[:cDocType.utiCount:cDocType.utiCount]
+			cUTIsSlice := unsafe.Slice(cDocType.utis, cDocType.utiCount)
 			for j := 0; j < int(cDocType.utiCount); j++ {
 				utis[j] = C.GoString(cUTIsSlice[j])
 			}
@@ -601,7 +601,7 @@ func ListSupportedDocumentTypes(appPath string) ([]DocumentType, error) {
 		// Convert extensions array
 		extensions := make([]string, int(cDocType.extensionCount))
 		if cDocType.extensionCount > 0 && cDocType.extensions != nil {
-			cExtensionsSlice := (*[1 << 28]*C.char)(unsafe.Pointer(cDocType.extensions))[:cDocType.extensionCount:cDocType.extensionCount]
+			cExtensionsSlice := unsafe.Slice(cDocType.extensions, cDocType.extensionCount)
 			for j := 0; j < int(cDocType.extensionCount); j++ {
 				extensions[j] = C.GoString(cExtensionsSlice[j])
 			}
