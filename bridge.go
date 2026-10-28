@@ -45,6 +45,13 @@ var (
 	ErrMemoryAllocation  = errors.New("memory allocation failed")
 )
 
+// IsUserDeclined reports whether err means the user kept the current
+// application in the macOS confirmation dialog (macOS 26.4 and later)
+func IsUserDeclined(err error) bool {
+	var bridgeErr *BridgeError
+	return errors.As(err, &bridgeErr) && bridgeErr.Code == ErrUserDeclined
+}
+
 // Helper function to convert C error to Go error
 func cErrorToGoError(code C.int, cError *C.char) error {
 	if code == C.BRIDGE_OK {
@@ -141,6 +148,14 @@ func GetDefaultAppForScheme(scheme string) (string, error) {
 	return appPath, nil
 }
 
+// PromptsForDefaultAppChanges reports whether macOS asks the user to confirm
+// each default app change made with SetDefaultForUTI or SetDefaultForScheme.
+// This is the case from macOS 26.4; those calls then block until the user
+// answers the system dialog (up to 120s).
+func PromptsForDefaultAppChanges() bool {
+	return C.PromptsForDefaultAppChanges() != 0
+}
+
 // SetDefaultForUTI sets the default application for a UTI
 //
 // Parameters:
@@ -193,33 +208,40 @@ func SetDefaultForScheme(appPath, scheme string) error {
 	return cErrorToGoError(code, cError)
 }
 
-// SetDefaultForExtension sets the default application for a file extension
+// SetDefaultForExtensions sets the default application for file extensions
 //
-// It writes the same extension-keyed LaunchServices handler as Finder's
+// It writes the same extension-keyed LaunchServices handlers as Finder's
 // "Change All", so it works for extensions that resolve to dynamic (dyn.*)
-// UTIs, which SetDefaultForUTI cannot set. lsd is restarted to apply it.
+// UTIs, which SetDefaultForUTI cannot set. lsd is restarted once per call to
+// apply them, so pass all extensions for an app in a single call.
 //
 // Parameters:
 //   - appPath: Full path to the application bundle
-//   - extension: File extension without dot (e.g., "tf")
+//   - extensions: File extensions without dot (e.g., "tf")
 //
 // Returns:
 //   - error: Error if any
-func SetDefaultForExtension(appPath, extension string) error {
-	extension = strings.TrimPrefix(extension, ".")
-	if appPath == "" || extension == "" {
+func SetDefaultForExtensions(appPath string, extensions []string) error {
+	if appPath == "" || len(extensions) == 0 {
 		return ErrInvalidParameters
+	}
+
+	cExts := make([]*C.char, len(extensions))
+	for i, ext := range extensions {
+		ext = strings.TrimPrefix(ext, ".")
+		if ext == "" {
+			return ErrInvalidParameters
+		}
+		cExts[i] = C.CString(ext)
+		defer C.free(unsafe.Pointer(cExts[i]))
 	}
 
 	cAppPath := C.CString(appPath)
 	defer C.free(unsafe.Pointer(cAppPath))
 
-	cExt := C.CString(extension)
-	defer C.free(unsafe.Pointer(cExt))
-
 	var cError *C.char
 
-	code := C.SetDefaultForExtension(cAppPath, cExt, &cError)
+	code := C.SetDefaultForExtensions(cAppPath, &cExts[0], C.int(len(cExts)), &cError)
 
 	return cErrorToGoError(code, cError)
 }

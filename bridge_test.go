@@ -4,11 +4,13 @@ package bridge
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Common macOS applications for testing
@@ -382,21 +384,27 @@ func TestSetDefaultForUTI_InvalidApp(t *testing.T) {
 	}
 }
 
-// TestSetDefaultForExtension_DynamicUTI tests setting a default for an extension
-// that no app declares, which resolves to a dynamic UTI that SetDefaultForUTI rejects
-func TestSetDefaultForExtension_DynamicUTI(t *testing.T) {
+// TestSetDefaultForExtensions_DynamicUTI tests setting defaults for extensions
+// that no app declares, which resolve to dynamic UTIs that SetDefaultForUTI rejects
+func TestSetDefaultForExtensions_DynamicUTI(t *testing.T) {
 	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
 		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
 	}
 
-	const ext = "bridgetestdyn"
 	const domain = "com.apple.LaunchServices/com.apple.launchservices.secure"
 
-	utis, err := ResolveUTIsForExtension(ext)
-	if err != nil || len(utis) == 0 || !strings.HasPrefix(utis[0], "dyn.") {
-		t.Fatalf("expected .%s to resolve to a dynamic UTI, got %v (err: %v)", ext, utis, err)
+	exts := make([]string, 20)
+	dynUTIs := make([]string, len(exts))
+	for i := range exts {
+		exts[i] = fmt.Sprintf("bridgetestdyn%d", i)
+		utis, err := ResolveUTIsForExtension(exts[i])
+		if err != nil || len(utis) == 0 || !strings.HasPrefix(utis[0], "dyn.") {
+			t.Fatalf("expected .%s to resolve to a dynamic UTI, got %v (err: %v)", exts[i], utis, err)
+		}
+		dynUTIs[i] = utis[0]
+		// Prime the in-process cache, as callers do when planning
+		_, _ = GetDefaultAppForUTI(dynUTIs[i])
 	}
-	dynUTI := utis[0]
 
 	backup, err := exec.Command("defaults", "export", domain, "-").Output()
 	if err != nil {
@@ -411,40 +419,41 @@ func TestSetDefaultForExtension_DynamicUTI(t *testing.T) {
 		_ = exec.Command("killall", "lsd").Run()
 	})
 
-	if err := SetDefaultForUTI(textEditPath, dynUTI); err == nil {
-		t.Logf("SetDefaultForUTI unexpectedly accepted dynamic UTI %s", dynUTI)
+	start := time.Now()
+	if err := SetDefaultForExtensions(textEditPath, exts); err != nil {
+		t.Fatalf("SetDefaultForExtensions() error = %v", err)
 	}
+	t.Logf("set %d extensions in %s", len(exts), time.Since(start))
 
-	if err := SetDefaultForExtension(textEditPath, ext); err != nil {
-		t.Fatalf("SetDefaultForExtension() error = %v", err)
-	}
-
-	currentApp, err := GetDefaultAppForUTI(dynUTI)
-	if err != nil {
-		t.Fatalf("Failed to verify default app: %v", err)
-	}
-	if !pathsMatch(currentApp, textEditPath) {
-		t.Errorf("SetDefaultForExtension() verification failed: got %s, want %s", currentApp, textEditPath)
+	for i, uti := range dynUTIs {
+		currentApp, err := GetDefaultAppForUTI(uti)
+		if err != nil {
+			t.Fatalf("Failed to verify default app for .%s: %v", exts[i], err)
+		}
+		if !pathsMatch(currentApp, textEditPath) {
+			t.Errorf("SetDefaultForExtensions() verification failed for .%s: got %s, want %s", exts[i], currentApp, textEditPath)
+		}
 	}
 }
 
-// TestSetDefaultForExtension_InvalidInput tests error handling for invalid input
-func TestSetDefaultForExtension_InvalidInput(t *testing.T) {
+// TestSetDefaultForExtensions_InvalidInput tests error handling for invalid input
+func TestSetDefaultForExtensions_InvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
 		appPath string
-		ext     string
+		exts    []string
 	}{
-		{name: "non-existent app", appPath: "/Applications/NonExistent.app", ext: "bridgetestdyn"},
-		{name: "empty app path", appPath: "", ext: "bridgetestdyn"},
-		{name: "empty extension", appPath: textEditPath, ext: ""},
-		{name: "dot only", appPath: textEditPath, ext: "."},
+		{name: "non-existent app", appPath: "/Applications/NonExistent.app", exts: []string{"bridgetestdyn"}},
+		{name: "empty app path", appPath: "", exts: []string{"bridgetestdyn"}},
+		{name: "no extensions", appPath: textEditPath, exts: nil},
+		{name: "empty extension", appPath: textEditPath, exts: []string{"bridgetestdyn", ""}},
+		{name: "dot only", appPath: textEditPath, exts: []string{"."}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := SetDefaultForExtension(tt.appPath, tt.ext); err == nil {
-				t.Errorf("SetDefaultForExtension() expected error for invalid input, got nil")
+			if err := SetDefaultForExtensions(tt.appPath, tt.exts); err == nil {
+				t.Errorf("SetDefaultForExtensions() expected error for invalid input, got nil")
 			}
 		})
 	}
@@ -727,4 +736,18 @@ func pathsMatch(path1, path2 string) bool {
 
 	// Case-insensitive match (macOS filesystems are often case-insensitive)
 	return strings.EqualFold(clean1, clean2)
+}
+
+// TestPromptsForDefaultAppChanges checks the result matches the running macOS version
+func TestPromptsForDefaultAppChanges(t *testing.T) {
+	out, err := exec.Command("sw_vers", "-productVersion").Output()
+	if err != nil {
+		t.Skipf("sw_vers unavailable: %v", err)
+	}
+	var major, minor int
+	_, _ = fmt.Sscanf(strings.TrimSpace(string(out)), "%d.%d", &major, &minor)
+	want := major > 26 || (major == 26 && minor >= 4)
+	if got := PromptsForDefaultAppChanges(); got != want {
+		t.Errorf("PromptsForDefaultAppChanges() = %v on macOS %s, want %v", got, strings.TrimSpace(string(out)), want)
+	}
 }

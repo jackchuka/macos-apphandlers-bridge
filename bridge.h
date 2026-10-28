@@ -51,6 +51,12 @@ int GetDefaultAppForUTI(const char *uti, char **outAppPath, char **outError);
 // Returns: BRIDGE_OK on success, error code otherwise
 int GetDefaultAppForScheme(const char *scheme, char **outAppPath, char **outError);
 
+// Report whether macOS asks the user to confirm default app changes made through
+// SetDefaultForUTI / SetDefaultForScheme (macOS 26.4 and later)
+//
+// Returns: 1 if a confirmation dialog is shown per change, 0 otherwise
+int PromptsForDefaultAppChanges(void);
+
 // Set the default application for a UTI
 //
 // Parameters:
@@ -71,20 +77,21 @@ int SetDefaultForUTI(const char *appPath, const char *uti, char **outError);
 // Returns: BRIDGE_OK on success, error code otherwise
 int SetDefaultForScheme(const char *appPath, const char *scheme, char **outError);
 
-// Set the default application for a file extension
+// Set the default application for file extensions
 //
-// Writes an extension-keyed LaunchServices handler, the same entry Finder's
+// Writes extension-keyed LaunchServices handlers, the same entries Finder's
 // "Change All" creates. Unlike SetDefaultForUTI, this works for extensions that
 // resolve to dynamic (dyn.*) UTIs because no installed app declares them.
-// Restarts lsd so the change takes effect immediately.
+// Restarts lsd once so the changes take effect, then waits until all are visible.
 //
 // Parameters:
 //   appPath: Full path to the application bundle
-//   extension: File extension without dot (e.g., "tf")
+//   extensions: Array of file extensions without dot (e.g., "tf")
+//   count: Number of extensions
 //   outError: Pointer to receive error message if any (caller must free)
 //
 // Returns: BRIDGE_OK on success, error code otherwise
-int SetDefaultForExtension(const char *appPath, const char *extension, char **outError);
+int SetDefaultForExtensions(const char *appPath, const char **extensions, int count, char **outError);
 
 // Resolve file extension to UTI(s)
 //
