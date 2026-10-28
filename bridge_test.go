@@ -737,3 +737,17 @@ func pathsMatch(path1, path2 string) bool {
 	// Case-insensitive match (macOS filesystems are often case-insensitive)
 	return strings.EqualFold(clean1, clean2)
 }
+
+// TestPromptsForDefaultAppChanges checks the result matches the running macOS version
+func TestPromptsForDefaultAppChanges(t *testing.T) {
+	out, err := exec.Command("sw_vers", "-productVersion").Output()
+	if err != nil {
+		t.Skipf("sw_vers unavailable: %v", err)
+	}
+	var major, minor int
+	_, _ = fmt.Sscanf(strings.TrimSpace(string(out)), "%d.%d", &major, &minor)
+	want := major > 26 || (major == 26 && minor >= 4)
+	if got := PromptsForDefaultAppChanges(); got != want {
+		t.Errorf("PromptsForDefaultAppChanges() = %v on macOS %s, want %v", got, strings.TrimSpace(string(out)), want)
+	}
+}

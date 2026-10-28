@@ -30,6 +30,26 @@ static char* URLToPath(NSURL* url) {
     return NSStringToCString([url path]);
 }
 
+// How long to wait for NSWorkspace to finish a default app change. Since macOS 26.4
+// every change asks the user to confirm in a system dialog, so allow time to answer.
+static const long long kSetDefaultTimeoutSeconds = 120;
+
+// Report whether an NSWorkspace error means the user kept the current app in the
+// confirmation dialog (wrapped as NSCocoaErrorDomain 256 with userCanceledErr underneath)
+static BOOL IsUserDeclined(NSError* error) {
+    for (NSError* e = error; e; e = e.userInfo[NSUnderlyingErrorKey]) {
+        if ([e.domain isEqualToString:NSCocoaErrorDomain] && e.code == NSUserCancelledError) return YES;
+        if ([e.domain isEqualToString:NSOSStatusErrorDomain] && e.code == userCanceledErr) return YES;
+    }
+    return NO;
+}
+
+// Report whether macOS asks the user to confirm default app changes for UTIs
+int PromptsForDefaultAppChanges(void) {
+    NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+    return v.majorVersion > 26 || (v.majorVersion == 26 && v.minorVersion >= 4);
+}
+
 // Get the default application for a UTI
 int GetDefaultAppForUTI(const char* uti, char** outAppPath, char** outError) {
     @autoreleasepool {
@@ -159,7 +179,7 @@ int SetDefaultForUTI(const char* appPath, const char* uti, char** outError) {
                          completionHandler:^(NSError * _Nullable error) {
             if (error) {
                 resultError = [error retain];
-                if ([error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSUserCancelledError) {
+                if (IsUserDeclined(error)) {
                     resultCode = BRIDGE_ERROR_USER_DECLINED;
                 } else {
                     resultCode = BRIDGE_ERROR_SYSTEM;
@@ -168,17 +188,19 @@ int SetDefaultForUTI(const char* appPath, const char* uti, char** outError) {
             dispatch_semaphore_signal(semaphore);
         }];
 
-        // Wait for completion (with timeout of 10 seconds)
-        long timeoutResult = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+        // Wait for completion; macOS may be waiting for the user to answer a confirmation dialog
+        long timeoutResult = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, kSetDefaultTimeoutSeconds * NSEC_PER_SEC));
 
         if (timeoutResult != 0) {
-            SetError(outError, @"Operation timed out");
+            SetError(outError, [NSString stringWithFormat:@"Timed out after %llds waiting for the change (unanswered confirmation dialog?)", kSetDefaultTimeoutSeconds]);
             return BRIDGE_ERROR_SYSTEM;
         }
 
         if (resultError) {
             // Provide detailed error information
-            NSString* detailedError = [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
+            NSString* detailedError = resultCode == BRIDGE_ERROR_USER_DECLINED
+                ? @"User kept the current application in the confirmation dialog"
+                : [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
                                        [resultError localizedDescription],
                                        [resultError domain],
                                        (long)[resultError code]];
@@ -231,7 +253,7 @@ int SetDefaultForScheme(const char* appPath, const char* scheme, char** outError
                          completionHandler:^(NSError * _Nullable error) {
             if (error) {
                 resultError = [error retain];
-                if ([error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSUserCancelledError) {
+                if (IsUserDeclined(error)) {
                     resultCode = BRIDGE_ERROR_USER_DECLINED;
                 } else {
                     resultCode = BRIDGE_ERROR_SYSTEM;
@@ -240,17 +262,19 @@ int SetDefaultForScheme(const char* appPath, const char* scheme, char** outError
             dispatch_semaphore_signal(semaphore);
         }];
 
-        // Wait for completion (with timeout of 10 seconds)
-        long timeoutResult = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+        // Wait for completion; macOS may be waiting for the user to answer a confirmation dialog
+        long timeoutResult = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, kSetDefaultTimeoutSeconds * NSEC_PER_SEC));
 
         if (timeoutResult != 0) {
-            SetError(outError, @"Operation timed out");
+            SetError(outError, [NSString stringWithFormat:@"Timed out after %llds waiting for the change (unanswered confirmation dialog?)", kSetDefaultTimeoutSeconds]);
             return BRIDGE_ERROR_SYSTEM;
         }
 
         if (resultError) {
             // Provide detailed error information
-            NSString* detailedError = [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
+            NSString* detailedError = resultCode == BRIDGE_ERROR_USER_DECLINED
+                ? @"User kept the current application in the confirmation dialog"
+                : [NSString stringWithFormat:@"%@ (domain: %@, code: %ld)",
                                        [resultError localizedDescription],
                                        [resultError domain],
                                        (long)[resultError code]];

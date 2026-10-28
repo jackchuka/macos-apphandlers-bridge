@@ -51,6 +51,12 @@ int GetDefaultAppForUTI(const char *uti, char **outAppPath, char **outError);
 // Returns: BRIDGE_OK on success, error code otherwise
 int GetDefaultAppForScheme(const char *scheme, char **outAppPath, char **outError);
 
+// Report whether macOS asks the user to confirm default app changes made through
+// SetDefaultForUTI / SetDefaultForScheme (macOS 26.4 and later)
+//
+// Returns: 1 if a confirmation dialog is shown per change, 0 otherwise
+int PromptsForDefaultAppChanges(void);
+
 // Set the default application for a UTI
 //
 // Parameters:

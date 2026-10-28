@@ -438,6 +438,12 @@ for _, dt := range defaults {
 
 ### Setter Functions
 
+Since macOS 26.4, every change made with `SetDefaultForUTI` or `SetDefaultForScheme` shows a system dialog asking the user to confirm it. These calls block until the user answers (up to 120 seconds). If the user keeps the current app, they return a `BridgeError` with code `ErrUserDeclined`; check it with `IsUserDeclined(err)`. `SetDefaultForExtensions` writes LaunchServices preferences directly and shows no dialog.
+
+#### `PromptsForDefaultAppChanges() bool`
+
+Reports whether the running macOS shows a confirmation dialog for each `SetDefaultForUTI` / `SetDefaultForScheme` change (macOS 26.4 and later). Use it to tell users to expect the dialogs before applying many changes.
+
 #### `SetDefaultForUTI(appPath, uti string) error`
 
 Sets the default application for a given UTI. This operation may prompt the user for confirmation.

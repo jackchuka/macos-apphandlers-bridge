@@ -45,6 +45,13 @@ var (
 	ErrMemoryAllocation  = errors.New("memory allocation failed")
 )
 
+// IsUserDeclined reports whether err means the user kept the current
+// application in the macOS confirmation dialog (macOS 26.4 and later)
+func IsUserDeclined(err error) bool {
+	var bridgeErr *BridgeError
+	return errors.As(err, &bridgeErr) && bridgeErr.Code == ErrUserDeclined
+}
+
 // Helper function to convert C error to Go error
 func cErrorToGoError(code C.int, cError *C.char) error {
 	if code == C.BRIDGE_OK {
@@ -139,6 +146,14 @@ func GetDefaultAppForScheme(scheme string) (string, error) {
 	C.FreeCString(cAppPath)
 
 	return appPath, nil
+}
+
+// PromptsForDefaultAppChanges reports whether macOS asks the user to confirm
+// each default app change made with SetDefaultForUTI or SetDefaultForScheme.
+// This is the case from macOS 26.4; those calls then block until the user
+// answers the system dialog (up to 120s).
+func PromptsForDefaultAppChanges() bool {
+	return C.PromptsForDefaultAppChanges() != 0
 }
 
 // SetDefaultForUTI sets the default application for a UTI
