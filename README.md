@@ -486,7 +486,7 @@ err := bridge.SetDefaultForScheme("/Applications/Firefox.app", "http")
 
 Sets the default application for file extensions, the same way Finder's "Get Info → Open with → Change All…" does. Use it for extensions that no installed app declares: they resolve to dynamic (`dyn.*`) UTIs, which `SetDefaultForUTI` cannot set.
 
-It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` once so the changes apply immediately, and waits until every new default is visible (usually within a couple of seconds, up to 30s). Pass all extensions for an app in one call: launchd delays respawning `lsd` when it was restarted shortly before, so each extra call can add several seconds. The preference format is undocumented by Apple and may change in future macOS releases.
+It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` once so the changes apply immediately, and waits until every extension resolves to an app with the same bundle ID (usually within a couple of seconds, up to 30s). Handlers name a bundle ID, not a path, so when several registered copies share it, LaunchServices resolves it to the highest-ranked copy (i.e., highest `CFBundleVersion`, then path order). Pass all extensions for an app in one call: launchd delays respawning `lsd` when it was restarted shortly before, so each extra call can add several seconds. The preference format is undocumented by Apple and may change in future macOS releases.
 
 **Parameters:**
 

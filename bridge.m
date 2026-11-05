@@ -373,13 +373,17 @@ int SetDefaultForExtensions(const char* appPath, const char** extensions, int co
 
         // Wait until every new handler is visible so callers can verify immediately.
         // launchd delays respawning lsd by up to ~20s when it was restarted shortly before.
-        NSString* expected = [[[NSURL fileURLWithPath:appPathString] URLByResolvingSymlinksInPath] path];
+
+        // Note: We compare bundle IDs, not paths. The handlers name a bundle ID, and when several
+        // registered copies share it, LaunchServices resolves it to the highest-ranked copy
+        // (highest CFBundleVersion, then path order), which is not necessarily appPath.
         NSMutableOrderedSet<NSString*>* pending = [[exts mutableCopy] autorelease];
         for (int i = 0; i < 300 && [pending count] > 0; i++) {
             for (NSString* ext in [[pending copy] autorelease]) {
                 UTType* utType = [UTType typeWithFilenameExtension:ext];
-                NSString* actual = [[[[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType] URLByResolvingSymlinksInPath] path];
-                if (actual && [actual caseInsensitiveCompare:expected] == NSOrderedSame) {
+                NSURL* actualURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType];
+                NSString* actualID = actualURL ? [[NSBundle bundleWithURL:actualURL] bundleIdentifier] : nil;
+                if (actualID && [actualID caseInsensitiveCompare:bundleID] == NSOrderedSame) {
                     [pending removeObject:ext];
                 }
             }
