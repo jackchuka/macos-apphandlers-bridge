@@ -1082,3 +1082,101 @@ void FreeDocumentTypeArray(DocumentType** docTypes, int count) {
         free(docTypes);
     }
 }
+
+static BOOL AppDirectoryExists(NSString* path, char** outError) {
+    BOOL isDir = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] || !isDir) {
+        SetError(outError, [NSString stringWithFormat:@"Application not found: %@", path]);
+        return NO;
+    }
+    return YES;
+}
+
+int GetBundleInfo(const char* appPath, char** outName, char** outBundleID, char** outVersion, char** outError) {
+    @autoreleasepool {
+        if (!appPath || !outName || !outBundleID || !outVersion) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        *outName = NULL;
+        *outBundleID = NULL;
+        *outVersion = NULL;
+
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        if (!AppDirectoryExists(appPathString, outError)) {
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSBundle* bundle = [NSBundle bundleWithPath:appPathString];
+        if (!bundle || ![bundle infoDictionary]) {
+            SetError(outError, [NSString stringWithFormat:@"Not an application bundle: %@", appPathString]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        // Same name chain as ListAllApplications
+        id name = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+        if (![name isKindOfClass:[NSString class]] || [name length] == 0) {
+            name = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+        }
+        if (![name isKindOfClass:[NSString class]] || [name length] == 0) {
+            name = [[appPathString lastPathComponent] stringByDeletingPathExtension];
+        }
+
+        id version = [bundle infoDictionary][@"CFBundleVersion"];
+        if ([version isKindOfClass:[NSNumber class]]) {
+            version = [version stringValue];
+        }
+
+        *outName = NSStringToCString(name);
+        *outBundleID = NSStringToCString([bundle bundleIdentifier]);
+        if ([version isKindOfClass:[NSString class]]) {
+            *outVersion = NSStringToCString(version);
+        }
+        return BRIDGE_OK;
+    }
+}
+
+int ListAppsForBundleID(const char* bundleID, char*** outAppPaths, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!bundleID || !outAppPaths || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        *outAppPaths = NULL;
+        *outCount = 0;
+
+        NSString* bundleIDString = [NSString stringWithUTF8String:bundleID];
+        if (!bundleIDString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        // Returned in LaunchServices preference order
+        NSArray<NSURL*>* urls = [[NSWorkspace sharedWorkspace] URLsForApplicationsWithBundleIdentifier:bundleIDString];
+        if ([urls count] == 0) {
+            return BRIDGE_OK;
+        }
+
+        char** paths = calloc([urls count], sizeof(char*));
+        if (!paths) {
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        int n = 0;
+        for (NSURL* url in urls) {
+            char* path = URLToPath(url);
+            if (path) {
+                paths[n++] = path;
+            }
+        }
+        if (n == 0) {
+            free(paths);
+            return BRIDGE_OK;
+        }
+        *outAppPaths = paths;
+        *outCount = n;
+        return BRIDGE_OK;
+    }
+}

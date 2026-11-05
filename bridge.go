@@ -649,3 +649,74 @@ func ListSupportedDocumentTypes(appPath string) ([]DocumentType, error) {
 
 	return docTypes, nil
 }
+
+// BundleInfo describes an application bundle as read from its Info.plist
+type BundleInfo struct {
+	Name     string // CFBundleName, else CFBundleDisplayName, else the file name
+	BundleID string // CFBundleIdentifier, empty if none
+	Version  string // CFBundleVersion, empty if none
+}
+
+// GetBundleInfo reads an application bundle's Info.plist, whether or not
+// LaunchServices knows about the bundle
+func GetBundleInfo(appPath string) (BundleInfo, error) {
+	if appPath == "" {
+		return BundleInfo{}, ErrInvalidParameters
+	}
+
+	cAppPath := C.CString(appPath)
+	defer C.free(unsafe.Pointer(cAppPath))
+
+	var cName, cBundleID, cVersion, cError *C.char
+	code := C.GetBundleInfo(cAppPath, &cName, &cBundleID, &cVersion, &cError)
+	if code != C.BRIDGE_OK {
+		return BundleInfo{}, cErrorToGoError(code, cError)
+	}
+
+	take := func(s *C.char) string {
+		if s == nil {
+			return ""
+		}
+		defer C.FreeCString(s)
+		return C.GoString(s)
+	}
+	return BundleInfo{
+		Name:     take(cName),
+		BundleID: take(cBundleID),
+		Version:  take(cVersion),
+	}, nil
+}
+
+// ListAppsForBundleID returns every registered application with the bundle
+// identifier, in LaunchServices preference order. The first one is the copy
+// that defaults for the bundle ID resolve to. When several copies are
+// registered, LaunchServices prefers the highest CFBundleVersion.
+func ListAppsForBundleID(bundleID string) ([]string, error) {
+	if bundleID == "" {
+		return nil, ErrInvalidParameters
+	}
+
+	cBundleID := C.CString(bundleID)
+	defer C.free(unsafe.Pointer(cBundleID))
+
+	var cAppPaths **C.char
+	var count C.int
+	var cError *C.char
+
+	code := C.ListAppsForBundleID(cBundleID, &cAppPaths, &count, &cError)
+	if code != C.BRIDGE_OK {
+		return nil, cErrorToGoError(code, cError)
+	}
+	if count == 0 {
+		return []string{}, nil
+	}
+
+	appPaths := make([]string, int(count))
+	cAppPathsSlice := unsafe.Slice(cAppPaths, count)
+	for i := 0; i < int(count); i++ {
+		appPaths[i] = C.GoString(cAppPathsSlice[i])
+	}
+	C.FreeCStringArray(cAppPaths, count)
+
+	return appPaths, nil
+}

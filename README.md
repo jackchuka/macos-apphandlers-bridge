@@ -503,6 +503,16 @@ It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices
 err := bridge.SetDefaultForExtensions("/Applications/Visual Studio Code.app", []string{"tf", "tfvars"})
 ```
 
+### Registration Functions
+
+#### `GetBundleInfo(appPath string) (BundleInfo, error)`
+
+Reads an application bundle's Info.plist (name, bundle ID, `CFBundleVersion`), whether or not LaunchServices knows about the bundle.
+
+#### `ListAppsForBundleID(bundleID string) ([]string, error)`
+
+Returns every registered application with the bundle ID, in LaunchServices preference order. The first one is the copy that defaults for the bundle ID will resolve to.
+
 ## Error Handling
 
 The package provides structured error types:
