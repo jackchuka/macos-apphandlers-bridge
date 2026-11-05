@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CoreServices/CoreServices.h>
 #import "bridge.h"
 #import <string.h>
 
@@ -1177,6 +1178,72 @@ int ListAppsForBundleID(const char* bundleID, char*** outAppPaths, int* outCount
         }
         *outAppPaths = paths;
         *outCount = n;
+        return BRIDGE_OK;
+    }
+}
+
+int RegisterApp(const char* appPath, char** outError) {
+    @autoreleasepool {
+        if (!appPath) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        if (!AppDirectoryExists(appPathString, outError)) {
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSURL* appURL = [NSURL fileURLWithPath:appPathString isDirectory:YES];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        OSStatus status = LSRegisterURL((__bridge CFURLRef)appURL, true);
+#pragma clang diagnostic pop
+        if (status != noErr) {
+            SetError(outError, [NSString stringWithFormat:@"LSRegisterURL failed for %@ (OSStatus %d)", appPathString, (int)status]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        return BRIDGE_OK;
+    }
+}
+
+static NSString* const kLSRegisterPath = @"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+int UnregisterApp(const char* appPath, char** outError) {
+    @autoreleasepool {
+        if (!appPath) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSTask* task = [[[NSTask alloc] init] autorelease];
+        [task setExecutableURL:[NSURL fileURLWithPath:kLSRegisterPath]];
+        [task setArguments:@[@"-u", appPathString]];
+        NSPipe* errPipe = [NSPipe pipe];
+        [task setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
+        [task setStandardError:errPipe];
+        NSError* taskError = nil;
+        if (![task launchAndReturnError:&taskError]) {
+            SetError(outError, [NSString stringWithFormat:@"Failed to run lsregister: %@", [taskError localizedDescription]]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        NSData* errData = [[errPipe fileHandleForReading] readDataToEndOfFile];
+        [task waitUntilExit];
+        if ([task terminationStatus] != 0) {
+            NSString* msg = [[[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] autorelease];
+            msg = [msg stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            SetError(outError, [NSString stringWithFormat:@"lsregister -u %@ exited with status %d%@%@",
+                                appPathString, [task terminationStatus], [msg length] ? @": " : @"", msg ?: @""]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
         return BRIDGE_OK;
     }
 }

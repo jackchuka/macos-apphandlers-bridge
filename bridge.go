@@ -4,7 +4,7 @@ package bridge
 
 /*
 #cgo CFLAGS: -x objective-c -fmodules -fblocks
-#cgo LDFLAGS: -framework Foundation -framework AppKit -framework UniformTypeIdentifiers
+#cgo LDFLAGS: -framework Foundation -framework AppKit -framework UniformTypeIdentifiers -framework CoreServices
 #include "bridge.h"
 #include <stdlib.h>
 */
@@ -719,4 +719,37 @@ func ListAppsForBundleID(bundleID string) ([]string, error) {
 	C.FreeCStringArray(cAppPaths, count)
 
 	return appPaths, nil
+}
+
+// RegisterApp registers an application bundle with LaunchServices
+func RegisterApp(appPath string) error {
+	if appPath == "" {
+		return ErrInvalidParameters
+	}
+
+	cAppPath := C.CString(appPath)
+	defer C.free(unsafe.Pointer(cAppPath))
+
+	var cError *C.char
+	if code := C.RegisterApp(cAppPath, &cError); code != C.BRIDGE_OK {
+		return cErrorToGoError(code, cError)
+	}
+	return nil
+}
+
+// UnregisterApp removes an application bundle from the LaunchServices
+// database, so it no longer competes with other copies of its bundle ID
+func UnregisterApp(appPath string) error {
+	if appPath == "" {
+		return ErrInvalidParameters
+	}
+
+	cAppPath := C.CString(appPath)
+	defer C.free(unsafe.Pointer(cAppPath))
+
+	var cError *C.char
+	if code := C.UnregisterApp(cAppPath, &cError); code != C.BRIDGE_OK {
+		return cErrorToGoError(code, cError)
+	}
+	return nil
 }

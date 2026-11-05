@@ -486,7 +486,7 @@ err := bridge.SetDefaultForScheme("/Applications/Firefox.app", "http")
 
 Sets the default application for file extensions, the same way Finder's "Get Info → Open with → Change All…" does. Use it for extensions that no installed app declares: they resolve to dynamic (`dyn.*`) UTIs, which `SetDefaultForUTI` cannot set.
 
-It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` once so the changes apply immediately, and waits until every extension resolves to an app with the same bundle ID (usually within a couple of seconds, up to 30s). Handlers name a bundle ID, not a path, so when several registered copies share it, LaunchServices resolves it to the highest-ranked copy (i.e., highest `CFBundleVersion`, then path order). Pass all extensions for an app in one call: launchd delays respawning `lsd` when it was restarted shortly before, so each extra call can add several seconds. The preference format is undocumented by Apple and may change in future macOS releases.
+It writes extension-keyed handlers (`LSHandlerContentTag`) to the LaunchServices preferences, restarts `lsd` once so the changes apply immediately, and waits until every extension resolves to an app with the same bundle ID (usually within a couple of seconds, up to 30s). Handlers name a bundle ID, not a path, so when several registered copies share it, LaunchServices resolves it to the highest-ranked copy (i.e., highest `CFBundleVersion`, then path order). Pass all extensions for an app in one call: launchd delays respawning `lsd` when it was restarted shortly before, so each extra call can add several seconds. The restart can also drop recent registration changes (see [Registration Functions](#registration-functions)). The preference format is undocumented by Apple and may change in future macOS releases.
 
 **Parameters:**
 
@@ -505,6 +505,10 @@ err := bridge.SetDefaultForExtensions("/Applications/Visual Studio Code.app", []
 
 ### Registration Functions
 
+When several copies of an app share a bundle ID, LaunchServices picks only one. Use these functions to see which copies are registered, compare their versions, and register or unregister them.
+
+**Note:** LaunchServices saves registration changes a few seconds after they're made, and the `lsd` restart in `SetDefaultForExtensions` drops any that aren't saved yet. So call `RegisterApp` and `UnregisterApp` after `SetDefaultForExtensions`, not before.
+
 #### `GetBundleInfo(appPath string) (BundleInfo, error)`
 
 Reads an application bundle's Info.plist (name, bundle ID, `CFBundleVersion`), whether or not LaunchServices knows about the bundle.
@@ -512,6 +516,25 @@ Reads an application bundle's Info.plist (name, bundle ID, `CFBundleVersion`), w
 #### `ListAppsForBundleID(bundleID string) ([]string, error)`
 
 Returns every registered application with the bundle ID, in LaunchServices preference order. The first one is the copy that defaults for the bundle ID will resolve to.
+
+#### `RegisterApp(appPath string) error`
+
+Registers an application bundle with LaunchServices (`LSRegisterURL`).
+
+#### `UnregisterApp(appPath string) error`
+
+Removes an application bundle from the LaunchServices database by running `lsregister -u`, so it no longer competes with other copies of its bundle ID.
+
+**Example:**
+
+```go
+paths, _ := bridge.ListAppsForBundleID("com.example.Foo")
+for _, p := range paths {
+    if p != chosen {
+        _ = bridge.UnregisterApp(p)
+    }
+}
+```
 
 ## Error Handling
 

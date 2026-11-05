@@ -811,3 +811,16 @@ func TestListAppsForBundleID(t *testing.T) {
 		t.Error("ListAppsForBundleID(\"\") expected error")
 	}
 }
+
+// TestRegisterApp_ErrorCases covers invalid input without touching the
+// LaunchServices database
+func TestRegisterApp_ErrorCases(t *testing.T) {
+	for _, p := range []string{"", "/nonexistent/Nope.app"} {
+		if err := RegisterApp(p); err == nil {
+			t.Errorf("RegisterApp(%q) expected error", p)
+		}
+	}
+	if err := UnregisterApp(""); err == nil {
+		t.Error("UnregisterApp(\"\") expected error")
+	}
+}

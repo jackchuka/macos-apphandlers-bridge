@@ -211,4 +211,23 @@ int GetBundleInfo(const char *appPath, char **outName, char **outBundleID, char 
 // Returns: BRIDGE_OK on success, error code otherwise
 int ListAppsForBundleID(const char *bundleID, char ***outAppPaths, int *outCount, char **outError);
 
+// Register an application bundle with LaunchServices (LSRegisterURL)
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int RegisterApp(const char *appPath, char **outError);
+
+// Remove an application bundle from the LaunchServices database. There is no
+// public API for this, so it runs lsregister -u.
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int UnregisterApp(const char *appPath, char **outError);
+
 #endif // MACOS_APPHANDLERS_BRIDGE_H
