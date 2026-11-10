@@ -688,8 +688,8 @@ func GetBundleInfo(appPath string) (BundleInfo, error) {
 }
 
 // ListAppsForBundleID returns every registered application with the bundle
-// identifier, in LaunchServices preference order. The first one is the copy
-// that defaults for the bundle ID resolve to. When several copies are
+// identifier. The first one is the copy that defaults for the bundle ID
+// resolve to; the order of the rest is unspecified. When several copies are
 // registered, LaunchServices prefers the highest CFBundleVersion.
 func ListAppsForBundleID(bundleID string) ([]string, error) {
 	if bundleID == "" {

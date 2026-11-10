@@ -1112,7 +1112,7 @@ int GetBundleInfo(const char* appPath, char** outName, char** outBundleID, char*
             return BRIDGE_ERROR_INVALID_APP;
         }
         NSBundle* bundle = [NSBundle bundleWithPath:appPathString];
-        if (!bundle || ![bundle infoDictionary]) {
+        if (!bundle || ![[bundle infoDictionary] count]) {
             SetError(outError, [NSString stringWithFormat:@"Not an application bundle: %@", appPathString]);
             return BRIDGE_ERROR_INVALID_APP;
         }
@@ -1154,10 +1154,24 @@ int ListAppsForBundleID(const char* bundleID, char*** outAppPaths, int* outCount
             SetError(outError, @"Invalid UTF-8 in parameters");
             return BRIDGE_ERROR_INVALID_APP;
         }
-        // Returned in LaunchServices preference order
-        NSArray<NSURL*>* urls = [[NSWorkspace sharedWorkspace] URLsForApplicationsWithBundleIdentifier:bundleIDString];
+        NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
+        NSMutableArray<NSURL*>* urls = [[[workspace URLsForApplicationsWithBundleIdentifier:bundleIDString] mutableCopy] autorelease];
         if ([urls count] == 0) {
             return BRIDGE_OK;
+        }
+        // The order of URLsForApplicationsWithBundleIdentifier: is undocumented,
+        // so put the copy the bundle ID resolves to first
+        NSURL* preferred = [workspace URLForApplicationWithBundleIdentifier:bundleIDString];
+        if (preferred) {
+            NSString* preferredPath = [[preferred URLByStandardizingPath] path];
+            NSUInteger idx = [urls indexOfObjectPassingTest:^BOOL(NSURL* url, NSUInteger i, BOOL* stop) {
+                return [[[url URLByStandardizingPath] path] isEqualToString:preferredPath];
+            }];
+            if (idx != NSNotFound && idx != 0) {
+                NSURL* first = [[[urls objectAtIndex:idx] retain] autorelease];
+                [urls removeObjectAtIndex:idx];
+                [urls insertObject:first atIndex:0];
+            }
         }
 
         char** paths = calloc([urls count], sizeof(char*));
@@ -1224,9 +1238,13 @@ int UnregisterApp(const char* appPath, char** outError) {
             return BRIDGE_ERROR_INVALID_APP;
         }
 
+        // An absolute path keeps lsregister from reading it as an option or
+        // resolving it against the working directory
+        NSString* absPath = [[NSURL fileURLWithPath:appPathString] path];
+
         NSTask* task = [[[NSTask alloc] init] autorelease];
         [task setExecutableURL:[NSURL fileURLWithPath:kLSRegisterPath]];
-        [task setArguments:@[@"-u", appPathString]];
+        [task setArguments:@[@"-u", absPath]];
         NSPipe* errPipe = [NSPipe pipe];
         [task setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
         [task setStandardError:errPipe];
