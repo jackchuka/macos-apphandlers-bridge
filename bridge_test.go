@@ -775,7 +775,12 @@ func TestGetBundleInfo_ErrorCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, p := range []string{"", "/nonexistent/Nope.app", file} {
+	plainDir := filepath.Join(notBundle, "Plain.app")
+	if err := os.Mkdir(plainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{"", "/nonexistent/Nope.app", file, plainDir} {
 		if _, err := GetBundleInfo(p); err == nil {
 			t.Errorf("GetBundleInfo(%q) expected error", p)
 		}
@@ -792,14 +797,8 @@ func TestListAppsForBundleID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAppsForBundleID() error = %v", err)
 	}
-	found := false
-	for _, p := range paths {
-		if p == textEditPath {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("ListAppsForBundleID() = %v, want it to contain %s", paths, textEditPath)
+	if len(paths) == 0 || paths[0] != textEditPath {
+		t.Errorf("ListAppsForBundleID() = %v, want %s first", paths, textEditPath)
 	}
 
 	paths, err = ListAppsForBundleID("org.example.does-not-exist")

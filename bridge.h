@@ -199,8 +199,8 @@ void FreeDocumentTypeArray(DocumentType **docTypes, int count);
 // Returns: BRIDGE_OK on success, error code otherwise
 int GetBundleInfo(const char *appPath, char **outName, char **outBundleID, char **outVersion, char **outError);
 
-// List every registered application with a bundle identifier, in LaunchServices
-// preference order: the first one is the copy defaults for the bundle ID resolve to
+// List every registered application with a bundle identifier. The first one is
+// the copy defaults for the bundle ID resolve to; the order of the rest is unspecified
 //
 // Parameters:
 //   bundleID: The bundle identifier (e.g., "com.apple.TextEdit")

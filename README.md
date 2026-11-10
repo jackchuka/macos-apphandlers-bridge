@@ -515,7 +515,7 @@ Reads an application bundle's Info.plist (name, bundle ID, `CFBundleVersion`), w
 
 #### `ListAppsForBundleID(bundleID string) ([]string, error)`
 
-Returns every registered application with the bundle ID, in LaunchServices preference order. The first one is the copy that defaults for the bundle ID will resolve to.
+Returns every registered application with the bundle ID. The first one is the copy that defaults for the bundle ID will resolve to; the order of the rest is unspecified.
 
 #### `RegisterApp(appPath string) error`
 
