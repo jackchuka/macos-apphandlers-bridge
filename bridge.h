@@ -185,4 +185,49 @@ int GetSupportedDocumentTypesForApp(const char *appPath, DocumentType ***outDocT
 //   count: The number of DocumentType structures in the array
 void FreeDocumentTypeArray(DocumentType **docTypes, int count);
 
+// Read an application bundle's Info.plist, whether or not LaunchServices knows
+// about the bundle
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   outName: Pointer to receive the name: CFBundleName, else CFBundleDisplayName,
+//            else the file name (caller must free)
+//   outBundleID: Pointer to receive the bundle identifier, NULL if none (caller must free)
+//   outVersion: Pointer to receive CFBundleVersion, NULL if none (caller must free)
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int GetBundleInfo(const char *appPath, char **outName, char **outBundleID, char **outVersion, char **outError);
+
+// List every registered application with a bundle identifier, in LaunchServices
+// preference order: the first one is the copy defaults for the bundle ID resolve to
+//
+// Parameters:
+//   bundleID: The bundle identifier (e.g., "com.apple.TextEdit")
+//   outAppPaths: Pointer to receive array of app path strings (caller must free using FreeCStringArray)
+//   outCount: Pointer to receive count of apps returned
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int ListAppsForBundleID(const char *bundleID, char ***outAppPaths, int *outCount, char **outError);
+
+// Register an application bundle with LaunchServices (LSRegisterURL)
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int RegisterApp(const char *appPath, char **outError);
+
+// Remove an application bundle from the LaunchServices database. There is no
+// public API for this, so it runs lsregister -u.
+//
+// Parameters:
+//   appPath: Full path to the application bundle
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int UnregisterApp(const char *appPath, char **outError);
+
 #endif // MACOS_APPHANDLERS_BRIDGE_H

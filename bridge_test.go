@@ -751,3 +751,76 @@ func TestPromptsForDefaultAppChanges(t *testing.T) {
 		t.Errorf("PromptsForDefaultAppChanges() = %v on macOS %s, want %v", got, strings.TrimSpace(string(out)), want)
 	}
 }
+
+// TestGetBundleInfo reads TextEdit's Info.plist
+func TestGetBundleInfo(t *testing.T) {
+	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
+		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
+	}
+
+	info, err := GetBundleInfo(textEditPath)
+	if err != nil {
+		t.Fatalf("GetBundleInfo() error = %v", err)
+	}
+	if info.BundleID != "com.apple.TextEdit" || info.Name == "" || info.Version == "" {
+		t.Errorf("GetBundleInfo() = %+v", info)
+	}
+}
+
+// TestGetBundleInfo_ErrorCases covers invalid paths
+func TestGetBundleInfo_ErrorCases(t *testing.T) {
+	notBundle := t.TempDir()
+	file := filepath.Join(notBundle, "file.app")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{"", "/nonexistent/Nope.app", file} {
+		if _, err := GetBundleInfo(p); err == nil {
+			t.Errorf("GetBundleInfo(%q) expected error", p)
+		}
+	}
+}
+
+// TestListAppsForBundleID looks up TextEdit by bundle ID
+func TestListAppsForBundleID(t *testing.T) {
+	if _, err := os.Stat(textEditPath); os.IsNotExist(err) {
+		t.Skipf("TextEdit not found at %s, skipping test", textEditPath)
+	}
+
+	paths, err := ListAppsForBundleID("com.apple.TextEdit")
+	if err != nil {
+		t.Fatalf("ListAppsForBundleID() error = %v", err)
+	}
+	found := false
+	for _, p := range paths {
+		if p == textEditPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ListAppsForBundleID() = %v, want it to contain %s", paths, textEditPath)
+	}
+
+	paths, err = ListAppsForBundleID("org.example.does-not-exist")
+	if err != nil || len(paths) != 0 {
+		t.Errorf("ListAppsForBundleID(unknown) = %v, %v; want empty, nil", paths, err)
+	}
+
+	if _, err := ListAppsForBundleID(""); err == nil {
+		t.Error("ListAppsForBundleID(\"\") expected error")
+	}
+}
+
+// TestRegisterApp_ErrorCases covers invalid input without touching the
+// LaunchServices database
+func TestRegisterApp_ErrorCases(t *testing.T) {
+	for _, p := range []string{"", "/nonexistent/Nope.app"} {
+		if err := RegisterApp(p); err == nil {
+			t.Errorf("RegisterApp(%q) expected error", p)
+		}
+	}
+	if err := UnregisterApp(""); err == nil {
+		t.Error("UnregisterApp(\"\") expected error")
+	}
+}

@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CoreServices/CoreServices.h>
 #import "bridge.h"
 #import <string.h>
 
@@ -373,13 +374,17 @@ int SetDefaultForExtensions(const char* appPath, const char** extensions, int co
 
         // Wait until every new handler is visible so callers can verify immediately.
         // launchd delays respawning lsd by up to ~20s when it was restarted shortly before.
-        NSString* expected = [[[NSURL fileURLWithPath:appPathString] URLByResolvingSymlinksInPath] path];
+
+        // Note: We compare bundle IDs, not paths. The handlers name a bundle ID, and when several
+        // registered copies share it, LaunchServices resolves it to the highest-ranked copy
+        // (highest CFBundleVersion, then path order), which is not necessarily appPath.
         NSMutableOrderedSet<NSString*>* pending = [[exts mutableCopy] autorelease];
         for (int i = 0; i < 300 && [pending count] > 0; i++) {
             for (NSString* ext in [[pending copy] autorelease]) {
                 UTType* utType = [UTType typeWithFilenameExtension:ext];
-                NSString* actual = [[[[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType] URLByResolvingSymlinksInPath] path];
-                if (actual && [actual caseInsensitiveCompare:expected] == NSOrderedSame) {
+                NSURL* actualURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenContentType:utType];
+                NSString* actualID = actualURL ? [[NSBundle bundleWithURL:actualURL] bundleIdentifier] : nil;
+                if (actualID && [actualID caseInsensitiveCompare:bundleID] == NSOrderedSame) {
                     [pending removeObject:ext];
                 }
             }
@@ -1076,5 +1081,169 @@ void FreeDocumentTypeArray(DocumentType** docTypes, int count) {
             }
         }
         free(docTypes);
+    }
+}
+
+static BOOL AppDirectoryExists(NSString* path, char** outError) {
+    BOOL isDir = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] || !isDir) {
+        SetError(outError, [NSString stringWithFormat:@"Application not found: %@", path]);
+        return NO;
+    }
+    return YES;
+}
+
+int GetBundleInfo(const char* appPath, char** outName, char** outBundleID, char** outVersion, char** outError) {
+    @autoreleasepool {
+        if (!appPath || !outName || !outBundleID || !outVersion) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        *outName = NULL;
+        *outBundleID = NULL;
+        *outVersion = NULL;
+
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        if (!AppDirectoryExists(appPathString, outError)) {
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSBundle* bundle = [NSBundle bundleWithPath:appPathString];
+        if (!bundle || ![bundle infoDictionary]) {
+            SetError(outError, [NSString stringWithFormat:@"Not an application bundle: %@", appPathString]);
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        // Same name chain as ListAllApplications
+        id name = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+        if (![name isKindOfClass:[NSString class]] || [name length] == 0) {
+            name = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+        }
+        if (![name isKindOfClass:[NSString class]] || [name length] == 0) {
+            name = [[appPathString lastPathComponent] stringByDeletingPathExtension];
+        }
+
+        id version = [bundle infoDictionary][@"CFBundleVersion"];
+        if ([version isKindOfClass:[NSNumber class]]) {
+            version = [version stringValue];
+        }
+
+        *outName = NSStringToCString(name);
+        *outBundleID = NSStringToCString([bundle bundleIdentifier]);
+        if ([version isKindOfClass:[NSString class]]) {
+            *outVersion = NSStringToCString(version);
+        }
+        return BRIDGE_OK;
+    }
+}
+
+int ListAppsForBundleID(const char* bundleID, char*** outAppPaths, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!bundleID || !outAppPaths || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        *outAppPaths = NULL;
+        *outCount = 0;
+
+        NSString* bundleIDString = [NSString stringWithUTF8String:bundleID];
+        if (!bundleIDString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        // Returned in LaunchServices preference order
+        NSArray<NSURL*>* urls = [[NSWorkspace sharedWorkspace] URLsForApplicationsWithBundleIdentifier:bundleIDString];
+        if ([urls count] == 0) {
+            return BRIDGE_OK;
+        }
+
+        char** paths = calloc([urls count], sizeof(char*));
+        if (!paths) {
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        int n = 0;
+        for (NSURL* url in urls) {
+            char* path = URLToPath(url);
+            if (path) {
+                paths[n++] = path;
+            }
+        }
+        if (n == 0) {
+            free(paths);
+            return BRIDGE_OK;
+        }
+        *outAppPaths = paths;
+        *outCount = n;
+        return BRIDGE_OK;
+    }
+}
+
+int RegisterApp(const char* appPath, char** outError) {
+    @autoreleasepool {
+        if (!appPath) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        if (!AppDirectoryExists(appPathString, outError)) {
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSURL* appURL = [NSURL fileURLWithPath:appPathString isDirectory:YES];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        OSStatus status = LSRegisterURL((__bridge CFURLRef)appURL, true);
+#pragma clang diagnostic pop
+        if (status != noErr) {
+            SetError(outError, [NSString stringWithFormat:@"LSRegisterURL failed for %@ (OSStatus %d)", appPathString, (int)status]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        return BRIDGE_OK;
+    }
+}
+
+static NSString* const kLSRegisterPath = @"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+int UnregisterApp(const char* appPath, char** outError) {
+    @autoreleasepool {
+        if (!appPath) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+        NSString* appPathString = [NSString stringWithUTF8String:appPath];
+        if (!appPathString) {
+            SetError(outError, @"Invalid UTF-8 in parameters");
+            return BRIDGE_ERROR_INVALID_APP;
+        }
+
+        NSTask* task = [[[NSTask alloc] init] autorelease];
+        [task setExecutableURL:[NSURL fileURLWithPath:kLSRegisterPath]];
+        [task setArguments:@[@"-u", appPathString]];
+        NSPipe* errPipe = [NSPipe pipe];
+        [task setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
+        [task setStandardError:errPipe];
+        NSError* taskError = nil;
+        if (![task launchAndReturnError:&taskError]) {
+            SetError(outError, [NSString stringWithFormat:@"Failed to run lsregister: %@", [taskError localizedDescription]]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        NSData* errData = [[errPipe fileHandleForReading] readDataToEndOfFile];
+        [task waitUntilExit];
+        if ([task terminationStatus] != 0) {
+            NSString* msg = [[[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] autorelease];
+            msg = [msg stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            SetError(outError, [NSString stringWithFormat:@"lsregister -u %@ exited with status %d%@%@",
+                                appPathString, [task terminationStatus], [msg length] ? @": " : @"", msg ?: @""]);
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        return BRIDGE_OK;
     }
 }
