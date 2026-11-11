@@ -31,6 +31,18 @@ typedef struct
     int isPackage;       // 1 if this is a package/bundle type, 0 otherwise
 } DocumentType;
 
+// A default application override stored in the LaunchServices preferences
+// (LSHandlers). Role fields hold bundle identifiers, or NULL when unset.
+typedef struct
+{
+    char *kind;       // "uti", "extension", "mime", or "scheme"
+    char *identifier; // e.g. "public.html", "md", "text/plain", "https"
+    char *roleAll;
+    char *roleViewer;
+    char *roleEditor;
+    char *roleShell;
+} HandlerOverride;
+
 // Get the default application for a UTI
 //
 // Parameters:
@@ -229,5 +241,20 @@ int RegisterApp(const char *appPath, char **outError);
 //
 // Returns: BRIDGE_OK on success, error code otherwise
 int UnregisterApp(const char *appPath, char **outError);
+
+// List the default application overrides stored in the LaunchServices
+// preferences: defaults chosen in Finder or System Settings, set with this
+// library, or claimed by apps. Entries for other tag classes are skipped.
+//
+// Parameters:
+//   outOverrides: Pointer to receive array of overrides (caller must free using FreeHandlerOverrideArray)
+//   outCount: Pointer to receive count of overrides returned
+//   outError: Pointer to receive error message if any (caller must free)
+//
+// Returns: BRIDGE_OK on success, error code otherwise
+int ListHandlerOverrides(HandlerOverride ***outOverrides, int *outCount, char **outError);
+
+// Free an array of HandlerOverride
+void FreeHandlerOverrideArray(HandlerOverride **overrides, int count);
 
 #endif // MACOS_APPHANDLERS_BRIDGE_H

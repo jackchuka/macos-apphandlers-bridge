@@ -403,6 +403,119 @@ int SetDefaultForExtensions(const char* appPath, const char** extensions, int co
     }
 }
 
+static void FreeHandlerOverride(HandlerOverride* o);
+
+// Read a role of an LSHandlers entry as a bundle identifier; "-" and missing roles are unset
+static char* HandlerRole(NSDictionary* entry, NSString* key) {
+    id value = entry[key];
+    if (![value isKindOfClass:[NSString class]] || [value length] == 0 || [value isEqualToString:@"-"]) {
+        return NULL;
+    }
+    return NSStringToCString(value);
+}
+
+// List the default application overrides in the LaunchServices preferences
+int ListHandlerOverrides(HandlerOverride*** outOverrides, int* outCount, char** outError) {
+    @autoreleasepool {
+        if (!outOverrides || !outCount) {
+            SetError(outError, @"Invalid parameters");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        *outOverrides = NULL;
+        *outCount = 0;
+
+        CFPropertyListRef value = CFPreferencesCopyAppValue(CFSTR("LSHandlers"), kLaunchServicesPrefsDomain);
+        if (!value) {
+            return BRIDGE_OK;
+        }
+        NSArray* entries = CFGetTypeID(value) == CFArrayGetTypeID() ? (NSArray*)value : @[];
+
+        NSMutableArray<NSValue*>* overrides = [NSMutableArray array];
+        for (id entry in entries) {
+            if (![entry isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+
+            NSString* kind = nil;
+            NSString* identifier = nil;
+            id scheme = entry[@"LSHandlerURLScheme"];
+            id contentType = entry[@"LSHandlerContentType"];
+            id tag = entry[@"LSHandlerContentTag"];
+            id tagClass = entry[@"LSHandlerContentTagClass"];
+            if ([scheme isKindOfClass:[NSString class]]) {
+                kind = @"scheme";
+                identifier = scheme;
+            } else if ([contentType isKindOfClass:[NSString class]]) {
+                kind = @"uti";
+                identifier = contentType;
+            } else if ([tag isKindOfClass:[NSString class]] && [tagClass isKindOfClass:[NSString class]]) {
+                if ([tagClass isEqualToString:(NSString*)UTTagClassFilenameExtension]) {
+                    kind = @"extension";
+                } else if ([tagClass isEqualToString:(NSString*)UTTagClassMIMEType]) {
+                    kind = @"mime";
+                }
+                identifier = tag;
+            }
+            if (!kind || [identifier length] == 0) {
+                continue;
+            }
+
+            HandlerOverride* override = calloc(1, sizeof(HandlerOverride));
+            if (!override) {
+                continue;
+            }
+            override->kind = NSStringToCString(kind);
+            override->identifier = NSStringToCString(identifier);
+            override->roleAll = HandlerRole(entry, @"LSHandlerRoleAll");
+            override->roleViewer = HandlerRole(entry, @"LSHandlerRoleViewer");
+            override->roleEditor = HandlerRole(entry, @"LSHandlerRoleEditor");
+            override->roleShell = HandlerRole(entry, @"LSHandlerRoleShell");
+            [overrides addObject:[NSValue valueWithPointer:override]];
+        }
+        CFRelease(value);
+
+        if ([overrides count] == 0) {
+            return BRIDGE_OK;
+        }
+        *outOverrides = malloc(sizeof(HandlerOverride*) * [overrides count]);
+        if (!*outOverrides) {
+            for (NSValue* v in overrides) {
+                FreeHandlerOverride([v pointerValue]);
+            }
+            SetError(outError, @"Memory allocation failed");
+            return BRIDGE_ERROR_SYSTEM;
+        }
+        for (NSUInteger i = 0; i < [overrides count]; i++) {
+            (*outOverrides)[i] = [overrides[i] pointerValue];
+        }
+        *outCount = (int)[overrides count];
+        return BRIDGE_OK;
+    }
+}
+
+static void FreeHandlerOverride(HandlerOverride* o) {
+    if (!o) {
+        return;
+    }
+    free(o->kind);
+    free(o->identifier);
+    free(o->roleAll);
+    free(o->roleViewer);
+    free(o->roleEditor);
+    free(o->roleShell);
+    free(o);
+}
+
+void FreeHandlerOverrideArray(HandlerOverride** overrides, int count) {
+    if (!overrides) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        FreeHandlerOverride(overrides[i]);
+    }
+    free(overrides);
+}
+
 // Resolve file extension to UTI(s)
 int ResolveUTIsForExtension(const char* extension, char*** outUTIs, int* outCount, char** outError) {
     @autoreleasepool {
