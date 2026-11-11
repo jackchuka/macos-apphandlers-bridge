@@ -823,3 +823,27 @@ func TestRegisterApp_ErrorCases(t *testing.T) {
 		t.Error("UnregisterApp(\"\") expected error")
 	}
 }
+
+// TestListHandlerOverrides reads the overrides without changing them
+func TestListHandlerOverrides(t *testing.T) {
+	overrides, err := ListHandlerOverrides()
+	if err != nil {
+		t.Fatalf("ListHandlerOverrides() error = %v", err)
+	}
+	for _, o := range overrides {
+		switch o.Kind {
+		case HandlerUTI, HandlerExtension, HandlerMIMEType, HandlerURLScheme:
+		default:
+			t.Errorf("unexpected kind %q in %+v", o.Kind, o)
+		}
+		if o.Identifier == "" {
+			t.Errorf("empty identifier in %+v", o)
+		}
+		for _, role := range []string{o.RoleAll, o.RoleViewer, o.RoleEditor, o.RoleShell} {
+			if role == "-" {
+				t.Errorf("unset role reported as \"-\" in %+v", o)
+			}
+		}
+	}
+	t.Logf("%d overrides", len(overrides))
+}

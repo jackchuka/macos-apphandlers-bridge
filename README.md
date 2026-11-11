@@ -436,6 +436,21 @@ for _, dt := range defaults {
 
 **Note:** Returns an empty list if the app is not the default for any of its supported types. This is not an error.
 
+#### `ListHandlerOverrides() ([]HandlerOverride, error)`
+
+Lists the default application overrides stored in the LaunchServices preferences (`LSHandlers`): defaults chosen in Finder ("Change All") or System Settings, set with this library, or claimed by apps for their own URL schemes. Unlike `GetDefaultAppForUTI`, it returns only what was chosen, not the defaults LaunchServices falls back to.
+
+Each override has a `Kind` (`HandlerUTI`, `HandlerExtension`, `HandlerMIMEType`, or `HandlerURLScheme`), an `Identifier`, and the bundle ID for each role (`RoleAll`, `RoleViewer`, `RoleEditor`, `RoleShell`), as stored (usually lowercase), or `""` when unset.
+
+```go
+overrides, _ := bridge.ListHandlerOverrides()
+for _, o := range overrides {
+    if o.RoleAll != "" {
+        fmt.Printf("%s %s -> %s\n", o.Kind, o.Identifier, o.RoleAll)
+    }
+}
+```
+
 ### Setter Functions
 
 Since macOS 26.4, every change made with `SetDefaultForUTI` or `SetDefaultForScheme` shows a system dialog asking the user to confirm it. These calls block until the user answers (up to 120 seconds). If the user keeps the current app, they return a `BridgeError` with code `ErrUserDeclined`; check it with `IsUserDeclined(err)`. `SetDefaultForExtensions` writes LaunchServices preferences directly and shows no dialog.

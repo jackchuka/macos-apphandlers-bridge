@@ -753,3 +753,65 @@ func UnregisterApp(appPath string) error {
 	}
 	return nil
 }
+
+// HandlerKind is what a HandlerOverride applies to
+type HandlerKind string
+
+const (
+	HandlerUTI       HandlerKind = "uti"
+	HandlerExtension HandlerKind = "extension"
+	HandlerMIMEType  HandlerKind = "mime"
+	HandlerURLScheme HandlerKind = "scheme"
+)
+
+// HandlerOverride is a default application override stored in the
+// LaunchServices preferences (LSHandlers). Each role holds a bundle
+// identifier as stored, usually lowercase, or "" when unset.
+type HandlerOverride struct {
+	Kind       HandlerKind
+	Identifier string // e.g. "public.html", "md", "text/plain", "https"
+	RoleAll    string
+	RoleViewer string
+	RoleEditor string
+	RoleShell  string
+}
+
+// ListHandlerOverrides lists the default application overrides stored in the
+// LaunchServices preferences: defaults chosen in Finder ("Change All") or
+// System Settings, set with this library, or claimed by apps for their own
+// URL schemes. Unlike GetDefaultAppForUTI, it returns only what was chosen,
+// not the defaults LaunchServices falls back to.
+func ListHandlerOverrides() ([]HandlerOverride, error) {
+	var cOverrides **C.HandlerOverride
+	var count C.int
+	var cError *C.char
+
+	code := C.ListHandlerOverrides(&cOverrides, &count, &cError)
+	if code != C.BRIDGE_OK {
+		return nil, cErrorToGoError(code, cError)
+	}
+	if count == 0 {
+		return []HandlerOverride{}, nil
+	}
+	defer C.FreeHandlerOverrideArray(cOverrides, count)
+
+	overrides := make([]HandlerOverride, int(count))
+	for i, o := range unsafe.Slice(cOverrides, count) {
+		overrides[i] = HandlerOverride{
+			Kind:       HandlerKind(C.GoString(o.kind)),
+			Identifier: C.GoString(o.identifier),
+			RoleAll:    goStringOrEmpty(o.roleAll),
+			RoleViewer: goStringOrEmpty(o.roleViewer),
+			RoleEditor: goStringOrEmpty(o.roleEditor),
+			RoleShell:  goStringOrEmpty(o.roleShell),
+		}
+	}
+	return overrides, nil
+}
+
+func goStringOrEmpty(s *C.char) string {
+	if s == nil {
+		return ""
+	}
+	return C.GoString(s)
+}
